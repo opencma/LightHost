@@ -28,7 +28,17 @@ public:
         addChildComponent (aboutPanel);
         setView (pluginsView);
         timerCallback();
-        startTimer (750);
+    }
+
+    void setStatusUpdatesEnabled (bool enabled)
+    {
+        if (enabled)
+        {
+            timerCallback();
+            startTimer (750);
+        }
+        else
+            stopTimer();
     }
 
     void setView (ViewType view)

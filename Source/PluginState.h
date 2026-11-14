@@ -5,6 +5,12 @@
 
 namespace PluginState
 {
+inline bool sameIdentity(const PluginDescription& a, const PluginDescription& b)
+{
+    return a.uid == b.uid && a.pluginFormatName == b.pluginFormatName
+        && a.fileOrIdentifier == b.fileOrIdentifier;
+}
+
 inline String encode(const String& value)
 {
     return MemoryBlock(value.toRawUTF8(), value.getNumBytesAsUTF8()).toBase64Encoding();

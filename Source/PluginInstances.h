@@ -110,11 +110,25 @@ public:
 
     std::vector<PluginInstance> ordered(const PropertySet& settings) const
     {
-        auto result = entries;
-        std::stable_sort(result.begin(), result.end(), [&](const PluginInstance& a, const PluginInstance& b)
+        struct OrderedInstance
         {
-            return settings.getIntValue(a.settingsKey("order")) < settings.getIntValue(b.settingsKey("order"));
+            const PluginInstance* instance;
+            int order;
+        };
+        // Read settings once per instance, rather than allocating keys and
+        // looking up properties again for every comparison during sorting.
+        std::vector<OrderedInstance> sorted;
+        sorted.reserve(entries.size());
+        for (const auto& entry : entries)
+            sorted.push_back({ &entry, settings.getIntValue(entry.settingsKey("order")) });
+        std::stable_sort(sorted.begin(), sorted.end(), [](const OrderedInstance& a, const OrderedInstance& b)
+        {
+            return a.order < b.order;
         });
+        std::vector<PluginInstance> result;
+        result.reserve(entries.size());
+        for (const auto& entry : sorted)
+            result.push_back(*entry.instance);
         return result;
     }
 

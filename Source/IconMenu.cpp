@@ -603,7 +603,7 @@ public:
 		activePluginRows = owner.getOrderedActivePlugins();
 		activePlugins.updateContent();
 		activeEmptyState.setVisible(owner.activePluginList.getNumTypes() == 0);
-		library.refresh();
+		library.refreshInstanceCounts();
 		resized();
 		activePlugins.repaint();
 		repaint();
@@ -1112,6 +1112,13 @@ public:
 	{
 		setVisible(false);
 	}
+
+    void visibilityChanged() override
+    {
+        DocumentWindow::visibilityChanged();
+        // A closed window stays alive in the tray. Poll only while it is visible.
+        if (content != nullptr) content->setStatusUpdatesEnabled(isVisible());
+    }
 
 private:
 	LightHostMainWindowContent* content; // Owned by DocumentWindow.

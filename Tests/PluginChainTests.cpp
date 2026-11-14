@@ -15,6 +15,9 @@
 #include <stdexcept>
 #include <limits>
 #include <thread>
+#if JUCE_INTEL
+ #include <xmmintrin.h>
+#endif
 
 namespace
 {
@@ -216,6 +219,54 @@ public:
     double sampleRate = 48000.0;
 };
 
+void checkAudioDenormals()
+{
+#if JUCE_INTEL
+    class TailProcessor : public GainProcessor
+    {
+    public:
+        TailProcessor() : GainProcessor(2.0f) {}
+        void processBlock(AudioBuffer<float>& audio, MidiBuffer& midi) override
+        {
+            GainProcessor::processBlock(audio, midi);
+            // A normal input decaying into a subnormal tests FTZ as well as DAZ.
+            volatile float tail = std::numeric_limits<float>::min();
+            audio.setSample(1, 1, tail * 0.5f);
+        }
+    };
+    const File logFile = File::createTempFile(".log");
+    {
+        TestDevice device;
+        TailProcessor processor;
+        AudioPlayer player(logFile);
+        player.audioDeviceAboutToStart(&device);
+        player.setProcessor(&processor);
+        AudioBuffer<float> input(2, 64), output(2, 64);
+        input.clear();
+        input.setSample(0, 0, std::numeric_limits<float>::denorm_min());
+        input.setSample(1, 0, -std::numeric_limits<float>::denorm_min());
+        input.setSample(0, 1, 0.25f);
+
+        // Simulate a driver thread that has not enabled DAZ/FTZ. Protection must
+        // cover the plugin's arithmetic, not just scrub its output afterwards.
+        const unsigned int originalMode = _mm_getcsr();
+        _mm_setcsr(originalMode & ~0x8040u);
+        player.audioDeviceIOCallback(input.getArrayOfReadPointers(), 2,
+                                     output.getArrayOfWritePointers(), 2, 64);
+        const bool restored = (_mm_getcsr() & 0x8040u) == 0;
+        _mm_setcsr(originalMode);
+        require(output.getSample(0, 0) == 0.0f && output.getSample(1, 0) == 0.0f,
+                "Subnormal samples reached plugin arithmetic without denormal protection");
+        require(output.getSample(1, 1) == 0.0f, "Plugin tails were not flushed out of the subnormal range");
+        require(output.getSample(0, 1) == 0.5f, "Denormal protection changed normal audio");
+        require(restored, "Audio callback changed the driver's floating-point mode");
+        player.audioDeviceStopped();
+        player.setProcessor(nullptr);
+    }
+    logFile.deleteFile();
+#endif
+}
+
 void checkPlayerDiagnostics()
 {
     const File logFile = File::createTempFile(".log");
@@ -245,6 +296,11 @@ void checkPlayerDiagnostics()
         require(output.getSample(0, 0) == 0.5f && output.getSample(1, 63) == 0.5f,
                 "Diagnostics changed valid audio");
 
+        // A driver/scheduler stall happens outside processBlock and must still
+        // be visible even when every individual callback finishes on time.
+        Thread::sleep(20);
+        player.audioDeviceIOCallback(input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 2, 64);
+
         player.audioDeviceStopped();
         device.sampleRate = 96000.0;
         device.blockSize = 128;
@@ -261,6 +317,8 @@ void checkPlayerDiagnostics()
     require(log.contains("buffers containing non-finite output: 1"), "Invalid-output diagnostic was lost");
     require(log.contains("Callbacks exceeding buffer duration:")
             && !log.contains("Callbacks exceeding buffer duration: 0"), "Missed processing deadline was not logged");
+    require(log.contains("Gaps between callbacks exceeding two buffer durations:"),
+            "A stall outside the audio callback was not logged");
     logFile.deleteFile();
 }
 
@@ -295,6 +353,17 @@ void checkIdentityAndMigration()
     PluginDescription otherFormat(first);
     otherFormat.pluginFormatName = "VST";
     require(PluginState::key("state", first) != PluginState::key("state", otherFormat), "Plugin formats share settings");
+    PluginDescription updated(first);
+    updated.name = "Renamed effect";
+    updated.version = "2.0";
+    PluginDescription differentCase(first);
+    differentCase.fileOrIdentifier = "/plugins/First.vst3";
+    require(PluginState::sameIdentity(first, updated)
+            && !PluginState::sameIdentity(first, second)
+            && !PluginState::sameIdentity(first, sameContainer)
+            && !PluginState::sameIdentity(first, otherFormat)
+            && !PluginState::sameIdentity(first, differentCase),
+            "Direct identity comparisons must match persisted keys, including case-sensitive paths");
     require(settings.getValue(PluginState::key("state", first)) == "old shared state"
             && settings.getValue(PluginState::key("state", second)) == "old shared state",
             "Legacy collision migration lost existing settings");
@@ -850,6 +919,28 @@ void checkImportedBackupRestart()
     require(root.deleteRecursively(), "Could not remove import restart fixture");
 }
 
+void checkInstanceOrdering()
+{
+    PluginDescription plugin;
+    PluginInstances instances;
+    PropertySet settings;
+    const auto first = instances.addType(plugin);
+    const auto second = instances.addType(plugin);
+    const auto third = instances.addType(plugin);
+    const auto fourth = instances.addType(plugin);
+    settings.setValue(first.settingsKey("order"), 5);
+    settings.setValue(second.settingsKey("order"), -2);
+    settings.setValue(third.settingsKey("order"), 5);
+    auto ordered = instances.ordered(settings);
+    require(ordered[0].instanceId == second.instanceId && ordered[1].instanceId == fourth.instanceId
+            && ordered[2].instanceId == first.instanceId && ordered[3].instanceId == third.instanceId,
+            "Ordering must preserve defaults, negative values, and insertion order for ties");
+    settings.setValue(third.settingsKey("order"), -3);
+    ordered = instances.ordered(settings);
+    require(ordered[0].instanceId == third.instanceId && instances.getType(0)->instanceId == first.instanceId,
+            "Ordering ignored changed settings or changed the underlying instance list");
+}
+
 void checkInstanceMigrationAndIsolation()
 {
     PluginDescription plugin;
@@ -1050,6 +1141,7 @@ int main()
         checkChain();
         checkStableNodeRouting();
         checkChannelSetup();
+        checkAudioDenormals();
         checkPlayerDiagnostics();
         checkIdentityAndMigration();
         checkBackups();
@@ -1059,11 +1151,13 @@ int main()
         checkBypassPresentation();
         checkPopupTransparency();
         checkImportedBackupRestart();
+        checkInstanceOrdering();
         checkInstanceMigrationAndIsolation();
         checkDuplicateInstanceAudioAndBackup();
         std::cout << "PASS: stereo routing, bypass CPU work, resume, instance preservation, missing plugins\n";
         std::cout << "PASS: stable node IDs, reorder/add/remove DSP preservation, selective editor cleanup, background backup and cancellation\n";
         std::cout << "PASS: stereo channel migration, invalid-output containment, device diagnostics\n";
+        std::cout << "PASS: denormal input/tail protection, driver float-mode restoration, callback gap diagnostics\n";
         std::cout << "PASS: plugin identity migration, backup round trips, active-only backups, editor reuse, unsupported layouts, state synchronization\n";
         std::cout << "PASS: inline library metadata and search, filtered removal preserving active copies, independent adds, stale results, selection clearing\n";
         std::cout << "PASS: tooltip-free library, shared startup switches with keyboard activation, transparent menus and dismissal cleanup\n";

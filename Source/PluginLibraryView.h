@@ -2,6 +2,7 @@
 #define LIGHTHOST_PLUGIN_LIBRARY_VIEW_H
 
 #include <algorithm>
+#include <map>
 #include <vector>
 
 class PluginLibraryView : public Component, public FileDragAndDropTarget, private ListBoxModel,
@@ -67,7 +68,7 @@ public:
     {
         const int selected = list.getSelectedRow();
         const String selectedKey = isPositiveAndBelow (selected, (int) rows.size())
-            ? PluginState::key ("library", rows[selected]) : String();
+            ? rows[selected].identity : String();
         rows.clear();
         const String query = searchBox.getText().trim();
         for (int i = 0; i < known.getNumTypes(); ++i)
@@ -76,28 +77,46 @@ public:
             if (query.isEmpty() || (plugin.name + " " + plugin.manufacturerName + " "
                 + plugin.pluginFormatName + " " + plugin.category + " " + plugin.version
                 + " " + plugin.descriptiveName).containsIgnoreCase (query))
-                rows.push_back (plugin);
+                rows.push_back ({ plugin, PluginState::key("library", plugin),
+                    plugin.manufacturerName.isEmpty() ? "Unknown maker" : plugin.manufacturerName,
+                    metadata(plugin), 0 });
         }
-        std::stable_sort (rows.begin(), rows.end(), [this] (const PluginDescription& a, const PluginDescription& b)
+        std::stable_sort (rows.begin(), rows.end(), [this] (const Row& a, const Row& b)
         {
             const auto group = [this] (const PluginDescription& plugin)
             {
                 return sortBy == 1 ? plugin.manufacturerName : sortBy == 2 ? plugin.pluginFormatName
                     : sortBy == 3 ? plugin.category : String();
             };
-            const int comparison = group(a).compareIgnoreCase(group(b));
+            const int comparison = group(a.plugin).compareIgnoreCase(group(b.plugin));
             if (comparison != 0) return comparison < 0;
-            return a.name.compareIgnoreCase (b.name) < 0;
+            return a.plugin.name.compareIgnoreCase (b.plugin.name) < 0;
         });
+        refreshInstanceCounts();
         list.deselectAllRows();
         list.updateContent();
         for (int i = 0; i < (int) rows.size(); ++i)
-            if (selectedKey == PluginState::key ("library", rows[i])) list.selectRow (i);
+            if (selectedKey == rows[i].identity) { list.selectRow (i); break; }
         empty.setText (known.getNumTypes() == 0 ? "Your library is ready for effects.\nScan for plugins to get started."
             : "No matching plugins.\nTry a different name or format.", dontSendNotification);
         empty.setVisible (rows.empty());
         list.repaint();
         repaint();
+    }
+
+    void refreshInstanceCounts()
+    {
+        // Chain edits do not change search results or library ordering. Cache
+        // counts here so painting a row never scans the chain or encodes keys.
+        std::map<String, int> counts;
+        for (int i = 0; i < active.getNumTypes(); ++i)
+            ++counts[PluginState::key("library", *active.getType(i))];
+        for (auto& row : rows)
+        {
+            const auto found = counts.find(row.identity);
+            row.instanceCount = found != counts.end() ? found->second : 0;
+        }
+        list.repaint();
     }
 
     void paint (Graphics& g) override
@@ -124,6 +143,13 @@ public:
     }
 
 private:
+    struct Row
+    {
+        PluginDescription plugin;
+        String identity, manufacturer, details;
+        int instanceCount;
+    };
+
     class SearchEditor : public TextEditor
     {
         void paintOverChildren (Graphics& g) override
@@ -133,23 +159,15 @@ private:
         }
     };
 
-    int instanceCount (const PluginDescription& plugin) const
-    {
-        int count = 0;
-        for (int i = 0; i < active.getNumTypes(); ++i)
-            if (PluginState::key ("library", plugin) == PluginState::key ("library", *active.getType (i))) ++count;
-        return count;
-    }
-
     void add (const PluginDescription& plugin)
     {
         // A row owns a description snapshot. A scan, sort, or search must never redirect its action.
         const PluginDescription copy (plugin);
         for (int i = 0; i < known.getNumTypes(); ++i)
-            if (PluginState::key ("library", copy) == PluginState::key ("library", *known.getType (i)))
+            if (PluginState::sameIdentity(copy, *known.getType(i)))
             {
                 if (onAddPlugin) onAddPlugin (copy);
-                refresh();
+                refreshInstanceCounts();
                 return;
             }
     }
@@ -192,15 +210,14 @@ private:
         HostDesign::drawSymbol (g, HostDesign::effect, juce::Rectangle<float> (8, 32, 22, 22), HostDesign::secondary);
         g.setColour (HostDesign::text);
         g.setFont (Font (17.0f, Font::bold));
-        g.drawText (rows[row].name, 42, 9, width - 104, 24, Justification::centredLeft);
+        g.drawText (rows[row].plugin.name, 42, 9, width - 104, 24, Justification::centredLeft);
         g.setColour (HostDesign::secondary);
         g.setFont (HostDesign::resolveUiFont(Font(15.0f)));
-        const int count = instanceCount(rows[row]);
-        const String maker = rows[row].manufacturerName.isEmpty() ? "Unknown maker" : rows[row].manufacturerName;
-        g.drawText (maker + (count > 0 ? " / " + String(count) + " in chain" : String()),
+        const int count = rows[row].instanceCount;
+        g.drawText (rows[row].manufacturer + (count > 0 ? " / " + String(count) + " in chain" : String()),
             42, 33, width - 104, 20, Justification::centredLeft);
         g.setFont (HostDesign::resolveUiFont(Font(14.0f)));
-        g.drawText (metadata(rows[row]), 42, 56, width - 48, 20, Justification::centredLeft);
+        g.drawText (rows[row].details, 42, 56, width - 48, 20, Justification::centredLeft);
     }
 
     Component* refreshComponentForRow (int row, bool, Component* existing) override
@@ -208,10 +225,10 @@ private:
         if (! isPositiveAndBelow (row, (int) rows.size())) { delete existing; return nullptr; }
         auto* control = dynamic_cast<AddControl*> (existing);
         if (control == nullptr) { delete existing; control = new AddControl (*this); }
-        control->update (rows[row]);
+        control->update (rows[row].plugin);
         return control;
     }
-    void returnKeyPressed (int row) override { if (isPositiveAndBelow (row, (int) rows.size())) add (rows[row]); }
+    void returnKeyPressed (int row) override { if (isPositiveAndBelow (row, (int) rows.size())) add (rows[row].plugin); }
     void listBoxItemDoubleClicked (int row, const MouseEvent&) override { returnKeyPressed (row); }
     static String metadata (const PluginDescription& plugin)
     {
@@ -225,20 +242,20 @@ private:
     const PluginDescription* selectedPlugin() const
     {
         const int row = list.getSelectedRow();
-        return isPositiveAndBelow(row, (int) rows.size()) ? &rows[row] : nullptr;
+        return isPositiveAndBelow(row, (int) rows.size()) ? &rows[row].plugin : nullptr;
     }
 
     void removeFromLibrary (const PluginDescription& plugin)
     {
-        const String identity = PluginState::key("library", plugin);
+        const PluginDescription copy(plugin);
         for (int i = known.getNumTypes(); --i >= 0;)
-            if (identity == PluginState::key("library", *known.getType(i))) known.removeType(i);
+            if (PluginState::sameIdentity(copy, *known.getType(i))) known.removeType(i);
         refresh();
     }
 
     void deleteKeyPressed (int row) override
     {
-        if (isPositiveAndBelow(row, (int) rows.size())) removeFromLibrary(rows[row]);
+        if (isPositiveAndBelow(row, (int) rows.size())) removeFromLibrary(rows[row].plugin);
     }
 
     void scanFor (int index)
@@ -327,7 +344,11 @@ private:
     }
     void textEditorTextChanged (TextEditor&) override { refresh(); }
     void textEditorEscapeKeyPressed (TextEditor&) override { searchBox.clear(); }
-    void changeListenerCallback (ChangeBroadcaster*) override { refresh(); }
+    void changeListenerCallback (ChangeBroadcaster* changed) override
+    {
+        if (changed == &active) refreshInstanceCounts();
+        else refresh();
+    }
     void buttonClicked (Button* button) override { if (button == &scanButton) showScanMenu(); else showLibraryOptions(); }
 
     KnownPluginList& known;
@@ -336,7 +357,7 @@ private:
     PropertiesFile* settings = nullptr;
     ScopedPointer<PluginListComponent> scanner;
     int sortBy = 0;
-    std::vector<PluginDescription> rows;
+    std::vector<Row> rows;
     SearchEditor searchBox;
     ListBox list;
     Label empty;
