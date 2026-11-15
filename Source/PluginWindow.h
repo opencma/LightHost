@@ -20,7 +20,7 @@ public:
 
     static PluginWindow* getWindowFor (AudioProcessorGraph::Node*, WindowFormatType);
 
-    static void closeCurrentlyOpenWindowsFor (const uint32 nodeId);
+    static void closeCurrentlyOpenWindowsFor (const AudioProcessorGraph::NodeID nodeId);
     static void closeAllCurrentlyOpenWindows();
     static bool containsActiveWindows();
 
@@ -30,8 +30,6 @@ public:
 private:
     AudioProcessorGraph::Node* owner;
     WindowFormatType type;
-
-    float getDesktopScaleFactor() const override     { return 1.0f; }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PluginWindow)
 };

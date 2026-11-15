@@ -1,0 +1,43 @@
+name: Build Windows
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: windows-x64, arch: x64 }
+          - { name: windows-arm64, arch: ARM64 }
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Fetch JUCE
+        run: git clone --depth 1 --branch 9.0.5 https://github.com/juce-framework/JUCE.git lib/juice
+      - name: Configure
+        run: cmake -S . -B build -A ${{ matrix.arch }} -DLIGHTHOST_BUILD_TESTS=ON
+      - name: Build
+        run: cmake --build build --config Release --target LightHost LightHostSetup LightHostRoutingTest --parallel 2
+      - name: Test x64
+        if: matrix.arch == 'x64'
+        run: ctest --test-dir build -C Release --output-on-failure
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item 'build\Release\Light Host Setup.exe' 'dist\LightHostSetup-${{ matrix.name }}.exe'
+          Copy-Item 'build\LightHost_artefacts\Release\Light Host.exe' 'dist\LightHost-${{ matrix.name }}.exe'
+          Get-ChildItem dist -File | ForEach-Object {
+            $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content -Encoding utf8 'dist\SHA256-${{ matrix.name }}.txt'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LightHost-${{ matrix.name }}
+          path: dist/*

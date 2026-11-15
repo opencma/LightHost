@@ -1,3 +1,8 @@
 Builds/
 JuceLibraryCode/
 lib/
+build/
+build-arm64/
+.vs/
+.vscode/
+CMakeUserPresets.json

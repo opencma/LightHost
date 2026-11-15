@@ -9,6 +9,11 @@ JUCE
 Website: http://www.juce.com
 License: GPLv3
 
-Steinberg VST Plug-In SDK
+Steinberg VST Plug-In SDK (optional external SDK)
 Website: http://www.steinberg.net/en/company/developers.html
 License: Steinberg VST Plug-In SDK Licensing Agreement
+
+VST2 compatibility interface (based on JUCE 5 and IOhannes m zmolnig's adapter)
+Source: https://github.com/loongarchlinux/repos/blob/e92de25a44f900c4f0cc6c8a5bbc85b784409c4a/extra/juce/juce_VSTInterface.h
+License: GPLv3 or later; copyright and license notice retained in the header.
+Local changes add definitions needed by current JUCE and correct the no-sound-in-stop flag.

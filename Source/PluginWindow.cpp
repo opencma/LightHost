@@ -1,4 +1,4 @@
-#include "../JuceLibraryCode/JuceHeader.h"
+#include <JuceHeader.h>
 #include "PluginWindow.h"
 
 class PluginWindow;
@@ -27,10 +27,10 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
     
 }
 
-void PluginWindow::closeCurrentlyOpenWindowsFor (const uint32 nodeId)
+void PluginWindow::closeCurrentlyOpenWindowsFor (const AudioProcessorGraph::NodeID nodeId)
 {
     for (int i = activePluginWindows.size(); --i >= 0;)
-        if (activePluginWindows.getUnchecked(i)->owner->nodeId == nodeId)
+        if (activePluginWindows.getUnchecked(i)->owner->nodeID == nodeId)
             delete activePluginWindows.getUnchecked (i);
 }
 
@@ -65,14 +65,14 @@ public:
         owner.addListener (this);
     }
 
-    ~ProcessorProgramPropertyComp()
+    ~ProcessorProgramPropertyComp() override
     {
         owner.removeListener (this);
     }
 
-    void refresh() { }
-    virtual void audioProcessorChanged (AudioProcessor*) { }
-    virtual void audioProcessorParameterChanged(AudioProcessor* processor, int, float) { }
+    void refresh() override { }
+    void audioProcessorChanged (AudioProcessor*, const ChangeDetails&) override { }
+    void audioProcessorParameterChanged (AudioProcessor*, int, float) override { }
 
 private:
     AudioProcessor& owner;
@@ -114,12 +114,12 @@ public:
         setSize (400, jlimit (25, 400, totalHeight));
     }
 
-    void paint (Graphics& g)
+    void paint (Graphics& g) override
     {
         g.fillAll (Colours::grey);
     }
 
-    void resized()
+    void resized() override
     {
         panel.setBounds (getLocalBounds());
     }
@@ -155,7 +155,7 @@ PluginWindow* PluginWindow::getWindowFor (AudioProcessorGraph::Node* const node,
     if (ui == nullptr)
     {
         if (type == Generic || type == Parameters)
-            ui = new GenericAudioProcessorEditor (processor);
+            ui = new GenericAudioProcessorEditor (*processor);
         else if (type == Programs)
             ui = new ProgramAudioProcessorEditor (processor);
     }

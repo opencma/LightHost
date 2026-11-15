@@ -1,0 +1,67 @@
+name: Build Linux and macOS
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-x64, os: ubuntu-latest }
+          - { name: linux-arm64, os: ubuntu-24.04-arm }
+          - { name: macos-x64, os: macos-15-intel }
+          - { name: macos-arm64, os: macos-latest }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Fetch JUCE
+        run: git clone --depth 1 --branch 9.0.5 https://github.com/juce-framework/JUCE.git lib/juice
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libjack-jackd2-dev libfreetype-dev \
+            libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+            libxinerama-dev libxrandr-dev libxrender-dev libxi-dev libcurl4-openssl-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLIGHTHOST_BUILD_TESTS=ON
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Package
+        shell: bash
+        run: |
+          mkdir -p dist
+          cd build
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            ditto -c -k --keepParent "LightHost_artefacts/Release/Light Host.app" "../dist/LightHost-${{ matrix.name }}.zip"
+            mkdir -p installer-scripts
+            cp ../Installer/macOS/postinstall installer-scripts/postinstall
+            chmod 755 installer-scripts/postinstall
+            pkgbuild --nopayload --scripts installer-scripts \
+              --identifier com.rolandoislas.lighthost.installer --version 1.2.2 \
+              "../dist/LightHostSetup-${{ matrix.name }}.pkg"
+          else
+            cp "LightHostSetup_artefacts/Release/Light Host Setup" "../dist/LightHostSetup-${{ matrix.name }}"
+            (cd LightHost_artefacts/Release && python3 -m zipfile -c \
+              "../../../dist/LightHost-${{ matrix.name }}.zip" "Light Host" LightHostUpdater)
+          fi
+          cd ../dist && (shasum -a 256 * | tee SHA256-${{ matrix.name }}.txt)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LightHost-${{ matrix.name }}
+          path: dist/*

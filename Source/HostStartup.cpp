@@ -1,9 +1,26 @@
-#include "../JuceLibraryCode/JuceHeader.h"
+#include <JuceHeader.h>
+#include "ErrorReporting.hpp"
 #include "IconMenu.hpp"
 
-#if ! (JUCE_PLUGINHOST_VST || JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
- #error "If you're building the audio plugin host, you probably want to enable VST and/or AU support"
+#if ! JUCE_PLUGINHOST_VST
+ #error "Light Host requires VST2 hosting support"
 #endif
+
+#if ! (JUCE_PLUGINHOST_VST3 || JUCE_PLUGINHOST_AU)
+ #error "If you're building the audio plugin host, you probably want to enable VST3 and/or AU support"
+#endif
+
+class HostLookAndFeel : public LookAndFeel_V4
+{
+public:
+    std::unique_ptr<AlertWindow> createAlertWindowForOptions (const MessageBoxOptions& options) override
+    {
+        if (options.getTitle() == TRANS ("Error when trying to open audio device!"))
+            return LookAndFeel_V4::createAlertWindowForOptions (
+                options.withMessage (options.getMessage() + audioDeviceHelp()));
+        return LookAndFeel_V4::createAlertWindowForOptions (options);
+    }
+};
 
 class PluginHostApp  : public JUCEApplication
 {
@@ -20,12 +37,12 @@ public:
 
         checkArguments(&options);
 
-        appProperties = new ApplicationProperties();
+        appProperties.reset (new ApplicationProperties());
         appProperties->setStorageParameters (options);
 
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
-        mainWindow = new IconMenu();
+        mainWindow.reset (new IconMenu());
 		#if JUCE_MAC
 			Process::setDockIconVisible(false);
 		#endif
@@ -33,14 +50,23 @@ public:
 
     void shutdown() override
     {
-        mainWindow = nullptr;
-        appProperties = nullptr;
+        mainWindow.reset();
+        appProperties.reset();
         LookAndFeel::setDefaultLookAndFeel (nullptr);
     }
 
     void systemRequestedQuit() override
     {
         JUCEApplicationBase::quit();
+    }
+
+    void unhandledException (const std::exception* exception, const String& sourceFilename,
+                             int lineNumber) override
+    {
+        const String reason = exception != nullptr ? String::fromUTF8 (exception->what())
+                                                   : "Unknown exception";
+        showErrorWithDiagnostics ("Unhandled application exception",
+                                  reason + "\nCaught at: " + sourceFilename + ":" + String (lineNumber));
     }
 
     const String getApplicationName() override       { return "Light Host"; }
@@ -51,11 +77,11 @@ public:
     }
 
     ApplicationCommandManager commandManager;
-    ScopedPointer<ApplicationProperties> appProperties;
-    LookAndFeel_V3 lookAndFeel;
+    std::unique_ptr<ApplicationProperties> appProperties;
+    HostLookAndFeel lookAndFeel;
 
 private:
-    ScopedPointer<IconMenu> mainWindow;
+    std::unique_ptr<IconMenu> mainWindow;
 
     StringArray getParameter(String lookFor) {
         StringArray parameters = getCommandLineParameterArray();

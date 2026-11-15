@@ -23,38 +23,64 @@ public:
 
 	const int INDEX_EDIT, INDEX_BYPASS, INDEX_DELETE, INDEX_MOVE_UP, INDEX_MOVE_DOWN;
 private:
-	#if JUCE_MAC
-    std::string exec(const char* cmd);
-	#endif
+    struct ActivePlugin : PluginDescription
+    {
+        String instanceId;
+        uint32 channelMask = 0xff;
+    };
     void timerCallback();
     void reloadPlugins();
     void showAudioSettings();
     void loadActivePlugins();
-    void savePluginStates();
+    bool savePluginStates();
     void deletePluginStates();
-	PluginDescription getNextPluginOlderThanTime(int &time);
 	void removePluginsLackingInputOutput();
-	std::vector<PluginDescription> getTimeSortedList();
+    std::vector<ActivePlugin> getTimeSortedList();
+    static String getKey (String type, const ActivePlugin& plugin);
+    static String getInstanceStateKey (const ActivePlugin& plugin, int channel, bool independentChannels);
+    static AudioProcessorGraph::NodeID getPluginNodeId (int pluginIndex, int channel, bool independentChannels);
+    bool usesIndependentChannelRouting() const;
+    void setIndependentChannelRouting (bool enabled);
+    String getAudioDeviceFingerprint() const;
+    void recoverAudioDevice();
+    void editPluginChannels (ActivePlugin plugin);
+    void restoreActivePlugins();
+    bool persistActivePlugins (const std::vector<ActivePlugin>& plugins);
 	void setIcon();
+    void locatePlugin (ActivePlugin plugin);
+    void replacePluginWithDefaults (ActivePlugin oldPlugin, PluginDescription replacement);
+    void showMainWindow();
+    void addPluginFile();
+    void checkForUpdates (bool manual);
+    void downloadUpdate (String url, String sha256, String version);
     
     AudioDeviceManager deviceManager;
     AudioPluginFormatManager formatManager;
     KnownPluginList knownPluginList;
-    KnownPluginList activePluginList;
+    std::vector<ActivePlugin> activePlugins;
+    StringArray pluginLoadErrors;
     KnownPluginList::SortMethod pluginSortMethod;
     PopupMenu menu;
-    ScopedPointer<PluginDirectoryScanner> scanner;
+    std::unique_ptr<PluginDirectoryScanner> scanner;
     bool menuIconLeftClicked;
+    bool mainWindowAction = false;
+    bool activeChainValid = true;
+    bool updateInProgress = false;
+    bool audioSettingsDialogOpen = false;
+    bool recoveringAudioDevice = false;
+    String lastAudioDeviceFingerprint;
+    int64 lastAudioRecoveryAttempt = 0;
     AudioProcessorGraph graph;
     AudioProcessorPlayer player;
-    AudioProcessorGraph::Node *inputNode;
-    AudioProcessorGraph::Node *outputNode;
 	#if JUCE_WINDOWS
 	int x, y;
 	#endif
 
 	class PluginListWindow;
-	ScopedPointer<PluginListWindow> pluginListWindow;
+    class MainWindow;
+    std::unique_ptr<MainWindow> mainWindow;
+	std::unique_ptr<PluginListWindow> pluginListWindow;
+    std::unique_ptr<FileChooser> pluginFileChooser;
 };
 
 #endif /* IconMenu_hpp */
