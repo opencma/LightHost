@@ -1,0 +1,72 @@
+#!/bin/bash
+set -euo pipefail
+
+fail() {
+    echo "Light Host installer: $*" >&2
+    exit 1
+}
+
+user=$(/usr/bin/stat -f '%Su' /dev/console)
+[[ "$user" != root && "$user" != loginwindow && -n "$user" ]] \
+    || fail "No logged-in desktop user was found."
+home=$(/usr/bin/dscl . -read "/Users/$user" NFSHomeDirectory | /usr/bin/cut -d ' ' -f 2-)
+[[ -d "$home" && "$home" == /* ]] || fail "Could not determine the user's home directory."
+
+case "$(/usr/bin/uname -m)" in
+    arm64) platform=macos-arm64 ;;
+    x86_64) platform=macos-x64 ;;
+    *) fail "This Mac architecture is not supported." ;;
+esac
+
+destination="$home/Applications"
+/usr/bin/sudo -u "$user" /bin/mkdir -p "$destination" || fail "Could not create $destination."
+staging=$(/usr/bin/sudo -u "$user" /usr/bin/mktemp -d "$destination/.LightHostInstall.XXXXXXXX") \
+    || fail "Could not create the staging directory."
+cleanup() {
+    /usr/bin/sudo -u "$user" /bin/rm -rf -- "$staging"
+}
+trap cleanup EXIT
+
+/usr/bin/sudo -u "$user" /usr/bin/curl --fail --silent --show-error --location \
+    --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 60 \
+    --max-filesize 65536 -o "$staging/manifest.json" \
+    https://annaspannertechsolutions.uk/lighthost/latest || fail "Could not download the update manifest."
+url=$(/usr/bin/plutil -extract "assets.$platform.url" raw -o - "$staging/manifest.json") \
+    || fail "The manifest does not contain a download URL for $platform."
+hash=$(/usr/bin/plutil -extract "assets.$platform.sha256" raw -o - "$staging/manifest.json") \
+    || fail "The manifest does not contain a SHA-256 for $platform."
+[[ "$url" =~ ^https://github\.com/Anna-Spanner/LightHost/releases/download/[a-zA-Z0-9_.-]+/[a-zA-Z0-9_.-]+$ ]] \
+    || fail "The package URL is not an allowed GitHub release URL."
+[[ "$hash" =~ ^[a-fA-F0-9]{64}$ ]] || fail "The package SHA-256 is invalid."
+
+/usr/bin/sudo -u "$user" /usr/bin/curl --fail --silent --show-error --location \
+    --proto '=https' --proto-redir '=https' --connect-timeout 15 --max-time 1800 \
+    --max-filesize 536870912 -o "$staging/package.zip" "$url" \
+    || fail "Could not download the Light Host package."
+actual=$(/usr/bin/shasum -a 256 "$staging/package.zip" | /usr/bin/awk '{print $1}')
+hash_lower=$(printf '%s' "$hash" | /usr/bin/tr '[:upper:]' '[:lower:]')
+[[ "$actual" == "$hash_lower" ]] || fail "The downloaded package failed SHA-256 verification."
+
+/usr/bin/sudo -u "$user" /usr/bin/ditto -x -k "$staging/package.zip" "$staging/extracted" \
+    || fail "Could not extract the application package."
+replacement="$staging/extracted/Light Host.app"
+[[ -d "$replacement" && -x "$replacement/Contents/MacOS/Light Host" \
+   && -x "$replacement/Contents/MacOS/LightHostUpdater" ]] \
+    || fail "The downloaded package does not contain the app and updater."
+
+target="$destination/Light Host.app"
+backup="$staging/previous.app"
+if [[ -e "$target" ]]; then
+    /usr/bin/sudo -u "$user" /bin/mv "$target" "$backup" \
+        || fail "Could not move the existing application. Close Light Host and retry."
+fi
+if ! /usr/bin/sudo -u "$user" /bin/mv "$replacement" "$target"; then
+    if [[ -e "$backup" ]]; then
+        if ! /usr/bin/sudo -u "$user" /bin/mv "$backup" "$target"; then
+            trap - EXIT
+            fail "Installation failed and the previous application could not be restored. It remains at $backup."
+        fi
+    fi
+    fail "Could not install the application. The previous application was restored if present."
+fi
+echo "Light Host was installed in $target"

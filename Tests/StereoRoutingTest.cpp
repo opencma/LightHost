@@ -2,6 +2,9 @@
 #include "../Source/PluginChannelRouting.hpp"
 #include "../Source/StereoRouting.hpp"
 #include "../Source/UpdateManifestValidation.hpp"
+#if JUCE_LINUX
+#include "../Source/LinuxUpdatePackage.hpp"
+#endif
 #include <cmath>
 #include <iostream>
 
@@ -38,6 +41,56 @@ public:
 int main()
 {
     juce::ScopedJuceInitialiser_GUI initialise;
+#if JUCE_LINUX
+    {
+        const auto directory = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                   .getNonexistentChildFile ("lighthost-package-test", {});
+        if (! directory.createDirectory())
+            return 11;
+        auto makePackage = [] (const juce::String& appName)
+        {
+            juce::ZipFile::Builder builder;
+            builder.addEntry (std::make_unique<juce::MemoryInputStream> ("app", 3, true), 1, appName, {});
+            builder.addEntry (std::make_unique<juce::MemoryInputStream> ("helper", 6, true), 1, "LightHostUpdater", {});
+            juce::MemoryOutputStream output;
+            if (! builder.writeToStream (output, nullptr))
+                return juce::MemoryBlock {};
+            return output.getMemoryBlock();
+        };
+        const auto invalid = extractLinuxPackage (makePackage ("../Light Host"), directory);
+        const auto valid = extractLinuxPackage (makePackage ("Light Host"), directory);
+        const auto fresh = directory.getChildFile ("fresh");
+        const auto freshResult = installLinuxPackage (makePackage ("Light Host"), fresh);
+        const auto upgrade = directory.getChildFile ("upgrade");
+        const bool prepared = upgrade.createDirectory().wasOk()
+            && upgrade.getChildFile ("Light Host").replaceWithText ("old-app")
+            && upgrade.getChildFile ("LightHostUpdater").replaceWithText ("old-helper");
+        const auto rejected = installLinuxPackage (makePackage ("../Light Host"), upgrade);
+        const bool preserved = upgrade.getChildFile ("Light Host").loadFileAsString() == "old-app"
+                            && upgrade.getChildFile ("LightHostUpdater").loadFileAsString() == "old-helper";
+        const auto upgraded = installLinuxPackage (makePackage ("Light Host"), upgrade);
+        const auto rollback = directory.getChildFile ("rollback");
+        const auto unexpectedDirectory = rollback.getChildFile ("LightHostUpdater");
+        const bool rollbackPrepared = unexpectedDirectory.createDirectory().wasOk()
+            && rollback.getChildFile ("Light Host").replaceWithText ("old-app")
+            && unexpectedDirectory.getChildFile ("keep").replaceWithText ("keep");
+        const auto failedUpgrade = installLinuxPackage (makePackage ("Light Host"), rollback);
+        const bool ok = invalid.failed() && valid.wasOk()
+                     && directory.getChildFile ("Light Host").loadFileAsString() == "app"
+                     && directory.getChildFile ("LightHostUpdater").loadFileAsString() == "helper"
+                     && freshResult.wasOk() && fresh.getChildFile ("Light Host").loadFileAsString() == "app"
+                     && fresh.getChildFile ("LightHostUpdater").loadFileAsString() == "helper"
+                     && prepared && rejected.failed() && preserved && upgraded.wasOk()
+                     && upgrade.getChildFile ("Light Host").loadFileAsString() == "app"
+                     && upgrade.getChildFile ("LightHostUpdater").loadFileAsString() == "helper"
+                     && rollbackPrepared && failedUpgrade.failed()
+                     && rollback.getChildFile ("Light Host").loadFileAsString() == "old-app"
+                     && unexpectedDirectory.getChildFile ("keep").loadFileAsString() == "keep";
+        const bool removed = directory.deleteRecursively();
+        if (! ok || ! removed)
+            return 11;
+    }
+#endif
     uint32 parsedMask = 0;
     if (! parsePluginChannelMask ("5", parsedMask) || parsedMask != 5
         || ! pluginUsesChannel (parsedMask, 0) || pluginUsesChannel (parsedMask, 1)
@@ -63,6 +116,31 @@ int main()
         || ! isValidLightHostSha256 (juce::String::repeatedString ("a", 64))
         || isValidLightHostSha256 ("not-a-hash"))
         return 9;
+    const auto manifest = juce::JSON::parse (
+        "{\"assets\":{\"windows-x64-package\":{"
+        "\"url\":\"https://github.com/Anna-Spanner/LightHost/releases/download/v1.2.3/LightHost-x64.exe\","
+        "\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"},"
+        "\"linux-x64-package\":{"
+        "\"url\":\"https://github.com/Anna-Spanner/LightHost/releases/download/v1.2.3/LightHost-linux-x64.zip\","
+        "\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}");
+    juce::String address, hash;
+    if (! getLightHostReleaseAsset (manifest, "windows-x64-package", address, hash)
+        || address != "https://github.com/Anna-Spanner/LightHost/releases/download/v1.2.3/LightHost-x64.exe"
+        || hash != juce::String::repeatedString ("a", 64)
+        || ! getLightHostReleaseAsset (manifest, "linux-x64-package", address, hash)
+        || getLightHostReleaseAsset (manifest, "linux-x64", address, hash)
+        || getLightHostReleaseAsset (manifest, "windows-arm64-package", address, hash)
+        || getLightHostReleaseAsset (juce::JSON::parse ("{\"assets\":{}}"), "windows-x64-package", address, hash)
+        || getLightHostReleaseAsset (juce::JSON::parse (
+               "{\"assets\":{\"windows-x64-package\":{\"url\":\"https://example.com/app.exe\","
+               "\"sha256\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"}}}"),
+               "windows-x64-package", address, hash)
+        || getLightHostReleaseAsset (juce::JSON::parse (
+               "{\"assets\":{\"windows-x64-package\":{"
+               "\"url\":\"https://github.com/Anna-Spanner/LightHost/releases/download/v1.2.3/app.exe\","
+               "\"sha256\":\"bad\"}}}"), "windows-x64-package", address, hash)
+        || getLightHostReleaseAsset (juce::JSON::parse ("{}"), "windows-x64-package", address, hash))
+        return 10;
     using Graph = juce::AudioProcessorGraph;
     using IO = Graph::AudioGraphIOProcessor;
     for (int inputs : { 1, 2 })

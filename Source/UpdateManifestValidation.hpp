@@ -1,6 +1,6 @@
 #pragma once
 
-#include <JuceHeader.h>
+#include <juce_core/juce_core.h>
 
 inline bool parseLightHostVersion (const juce::String& text, int (&version)[3])
 {
@@ -50,4 +50,15 @@ inline bool isValidLightHostReleaseAssetUrl (const juce::String& address)
 inline bool isValidLightHostSha256 (const juce::String& hash)
 {
     return hash.length() == 64 && hash.containsOnly ("0123456789abcdefABCDEF");
+}
+
+inline bool getLightHostReleaseAsset (const juce::var& manifest, const juce::String& platform,
+                                     juce::String& address, juce::String& hash)
+{
+    const auto assets = manifest.getProperty ("assets", {});
+    const auto asset = assets.getProperty (platform, {});
+    address = asset.getProperty ("url", {}).toString();
+    hash = asset.getProperty ("sha256", {}).toString();
+    return manifest.isObject() && assets.isObject() && asset.isObject()
+        && isValidLightHostReleaseAssetUrl (address) && isValidLightHostSha256 (hash);
 }

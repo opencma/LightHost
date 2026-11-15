@@ -30,7 +30,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libasound2-dev libjack-jackd2-dev libfreetype-dev \
             libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
-            libxinerama-dev libxrandr-dev libxrender-dev libxi-dev
+            libxinerama-dev libxrandr-dev libxrender-dev libxi-dev libcurl4-openssl-dev
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DLIGHTHOST_BUILD_TESTS=ON
@@ -48,9 +48,16 @@ jobs:
           cd build
           if [ "$RUNNER_OS" = "macOS" ]; then
             ditto -c -k --keepParent "LightHost_artefacts/Release/Light Host.app" "../dist/LightHost-${{ matrix.name }}.zip"
+            mkdir -p installer-scripts
+            cp ../Installer/macOS/postinstall installer-scripts/postinstall
+            chmod 755 installer-scripts/postinstall
+            pkgbuild --nopayload --scripts installer-scripts \
+              --identifier com.rolandoislas.lighthost.installer --version 1.2.2 \
+              "../dist/LightHostSetup-${{ matrix.name }}.pkg"
           else
-            cp LightHost_artefacts/Release/"Light Host" "../dist/LightHost-${{ matrix.name }}"
-            tar -czf "../dist/LightHost-${{ matrix.name }}.tar.gz" -C LightHost_artefacts/Release "Light Host" LightHostUpdater
+            cp "LightHostSetup_artefacts/Release/Light Host Setup" "../dist/LightHostSetup-${{ matrix.name }}"
+            (cd LightHost_artefacts/Release && python3 -m zipfile -c \
+              "../../../dist/LightHost-${{ matrix.name }}.zip" "Light Host" LightHostUpdater)
           fi
           cd ../dist && (shasum -a 256 * | tee SHA256-${{ matrix.name }}.txt)
 

@@ -15,6 +15,9 @@
 #include "StereoRouting.hpp"
 #include "UpdateManifestValidation.hpp"
 #include "GlobalBypassShortcut.hpp"
+#if JUCE_LINUX
+#include "LinuxUpdatePackage.hpp"
+#endif
 #include <algorithm>
 #include <utility>
 #if ! JUCE_WINDOWS
@@ -85,9 +88,9 @@ String currentUpdatePlatform()
     #endif
 #elif JUCE_LINUX
     #if defined(__aarch64__)
-    return "linux-arm64";
+    return "linux-arm64-package";
     #else
-    return "linux-x64";
+    return "linux-x64-package";
     #endif
 #else
     return {};
@@ -1596,12 +1599,8 @@ void IconMenu::checkForUpdates (bool manual)
                 return;
             }
             const String platform = currentUpdatePlatform();
-            const auto assets = json.getProperty ("assets", {});
-            const auto asset = assets.getProperty (platform, {});
-            const String address = asset.getProperty ("url", {}).toString();
-            const String hash = asset.getProperty ("sha256", {}).toString();
-            if (! assets.isObject() || ! asset.isObject()
-                || ! isValidLightHostReleaseAssetUrl (address) || ! isValidLightHostSha256 (hash))
+            String address, hash;
+            if (! getLightHostReleaseAsset (json, platform, address, hash))
             {
                 if (manual)
                     showErrorWithDiagnostics ("Update unavailable",
@@ -1647,7 +1646,21 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
         {
 #if JUCE_LINUX
             const auto runningApp = File::getSpecialLocation (File::currentExecutableFile);
-            updateFile = runningApp.getParentDirectory().getNonexistentChildFile ("LightHostUpdate", ".bin");
+            const auto staging = runningApp.getParentDirectory().getNonexistentChildFile (".LightHostUpdate", {});
+            if (! staging.createDirectory())
+                response.error = "Could not create the update staging directory.";
+            else
+            {
+                const auto extraction = extractLinuxPackage (response.data, staging);
+                if (extraction.failed())
+                {
+                    response.error = extraction.getErrorMessage();
+                    if (! staging.deleteRecursively())
+                        response.error += "\nCould not remove " + staging.getFullPathName();
+                }
+                else
+                    updateFile = staging.getChildFile ("Light Host");
+            }
 #elif JUCE_MAC
             updateFile = File::getSpecialLocation (File::tempDirectory)
                              .getNonexistentChildFile ("LightHostUpdate", ".zip");
@@ -1655,17 +1668,26 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
             updateFile = File::getSpecialLocation (File::tempDirectory)
                              .getNonexistentChildFile ("LightHostSetup", ".exe");
 #endif
+#if ! JUCE_LINUX
             if (! updateFile.replaceWithData (response.data.getData(), response.data.getSize()))
             {
                 response.error = "Could not write the downloaded update to disk.";
                 updateFile.deleteFile();
             }
+#endif
         }
         MessageManager::callAsync ([safeThis, updateFile, version, platform, error = response.error]
         {
             if (safeThis == nullptr)
             {
-                if (updateFile != File()) updateFile.deleteFile();
+                if (updateFile != File())
+                {
+#if JUCE_LINUX
+                    updateFile.getParentDirectory().deleteRecursively();
+#else
+                    updateFile.deleteFile();
+#endif
+                }
                 return;
             }
             safeThis->updateInProgress = false;
@@ -1714,7 +1736,11 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
                 showErrorWithDiagnostics ("Update helper unavailable",
                                           "The platform updater is missing beside the application: "
                                               + helper.getFullPathName());
+#if JUCE_LINUX
+                updateFile.getParentDirectory().deleteRecursively();
+#else
                 updateFile.deleteFile();
+#endif
                 return;
             }
             const auto status = updateStatusFile();
@@ -1727,9 +1753,12 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
             const auto target = runningApp.getParentDirectory().getParentDirectory().getParentDirectory();
             const auto warning = "Light Host will close and reopen to apply the update. macOS may block this unsigned app until it is signed and notarized.";
 #endif
-            const std::vector<String> arguments { mode, String ((int64) getpid()),
-                                                  updateFile.getFullPathName(), target.getFullPathName(),
-                                                  status.getFullPathName() };
+            std::vector<String> arguments { mode, String ((int64) getpid()),
+                                            updateFile.getFullPathName(), target.getFullPathName(),
+                                            status.getFullPathName() };
+#if JUCE_LINUX
+            arguments.push_back (updateFile.getSiblingFile ("LightHostUpdater").getFullPathName());
+#endif
             AlertWindow::showAsync (MessageBoxOptions()
                 .withIconType (MessageBoxIconType::QuestionIcon)
                 .withTitle ("Install Light Host update?")
@@ -1739,7 +1768,11 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
                 {
                     if (result != 1)
                     {
+#if JUCE_LINUX
+                        if (! updateFile.getParentDirectory().deleteRecursively())
+#else
                         if (! updateFile.deleteFile())
+#endif
                             showErrorWithDiagnostics ("Could not remove downloaded update", updateFile.getFullPathName());
                         return;
                     }
@@ -1748,7 +1781,11 @@ void IconMenu::downloadUpdate (String url, String sha256, String version)
                     else
                     {
                         showErrorWithDiagnostics ("Could not start update helper", helper.getFullPathName());
+#if JUCE_LINUX
+                        if (! updateFile.getParentDirectory().deleteRecursively())
+#else
                         if (! updateFile.deleteFile())
+#endif
                             showErrorWithDiagnostics ("Could not remove downloaded update", updateFile.getFullPathName());
                     }
                 });

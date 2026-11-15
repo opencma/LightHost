@@ -64,7 +64,8 @@ bool runAndWait (const std::vector<std::string>& arguments)
     return WIFEXITED (status) && WEXITSTATUS (status) == 0;
 }
 
-int installLinux (pid_t pid, const fs::path& source, const fs::path& target, const fs::path& status)
+int installLinux (pid_t pid, const fs::path& source, const fs::path& target, const fs::path& status,
+                  const fs::path& replacementHelper)
 {
     if (! waitForProcess (pid))
     {
@@ -72,14 +73,70 @@ int installLinux (pid_t pid, const fs::path& source, const fs::path& target, con
         return 1;
     }
 
-    if (::chmod (source.c_str(), 0755) != 0)
+    if (::chmod (source.c_str(), 0755) != 0
+        || (! replacementHelper.empty() && ::chmod (replacementHelper.c_str(), 0755) != 0))
     {
         writeStatus (status, "The downloaded Linux app could not be made executable.");
         return 1;
     }
 
     std::error_code error;
-    fs::rename (source, target, error);
+    if (! replacementHelper.empty())
+    {
+        const auto helper = target.parent_path() / "LightHostUpdater";
+        const auto oldApp = source.parent_path() / "previous-app";
+        const auto oldHelper = source.parent_path() / "previous-updater";
+        fs::rename (target, oldApp, error);
+        if (error)
+        {
+            writeStatus (status, "Could not back up the Linux app: " + error.message());
+            return 1;
+        }
+        fs::rename (helper, oldHelper, error);
+        if (error)
+        {
+            std::error_code restoreError;
+            fs::rename (oldApp, target, restoreError);
+            writeStatus (status, "Could not back up the updater: " + error.message()
+                                 + (restoreError ? ". Previous app remains at " + oldApp.string() : ""));
+            return 1;
+        }
+        fs::rename (source, target, error);
+        if (! error)
+            fs::rename (replacementHelper, helper, error);
+        if (error)
+        {
+            std::error_code removeError, appRestoreError, helperRestoreError;
+            if (fs::exists (target))
+                fs::remove (target, removeError);
+            fs::rename (oldApp, target, appRestoreError);
+            fs::rename (oldHelper, helper, helperRestoreError);
+            writeStatus (status, "Could not install the Linux update: " + error.message()
+                                 + ((removeError || appRestoreError || helperRestoreError)
+                                    ? ". Some backups remain in " + source.parent_path().string() : ""));
+            return 1;
+        }
+        fs::remove (oldApp, error);
+        if (error)
+        {
+            writeStatus (status, "Update installed, but could not remove old app: " + error.message());
+            return 1;
+        }
+        fs::remove (oldHelper, error);
+        if (error)
+        {
+            writeStatus (status, "Update installed, but could not remove old updater: " + error.message());
+            return 1;
+        }
+        fs::remove (source.parent_path(), error);
+        if (error)
+        {
+            writeStatus (status, "Update installed, but could not remove staging directory: " + error.message());
+            return 1;
+        }
+    }
+    else
+        fs::rename (source, target, error);
     if (error)
     {
         writeStatus (status, "Could not replace the Linux app: " + error.message());
@@ -110,7 +167,7 @@ int installMac (pid_t pid, const fs::path& archive, const fs::path& target, cons
         return 1;
     }
 
-    std::string temporaryTemplate = (fs::temp_directory_path() / "LightHostUpdate-XXXXXX").string();
+    std::string temporaryTemplate = (target.parent_path() / ".LightHostUpdate-XXXXXX").string();
     std::vector<char> temporaryPath (temporaryTemplate.begin(), temporaryTemplate.end());
     temporaryPath.push_back ('\0');
     if (::mkdtemp (temporaryPath.data()) == nullptr)
@@ -134,10 +191,8 @@ int installMac (pid_t pid, const fs::path& archive, const fs::path& target, cons
         return 1;
     }
 
-    const fs::path backup = target.string() + ".update-backup";
+    const fs::path backup = staging / "Light Host.previous.app";
     std::error_code error;
-    fs::remove_all (backup, error);
-    error.clear();
     fs::rename (target, backup, error);
     if (error)
     {
@@ -151,8 +206,18 @@ int installMac (pid_t pid, const fs::path& archive, const fs::path& target, cons
     {
         std::error_code restoreError;
         fs::rename (backup, target, restoreError);
-        writeStatus (status, "Could not install the new app bundle: " + error.message());
-        fs::remove_all (staging);
+        if (restoreError)
+        {
+            writeStatus (status, "Could not install the new app bundle: " + error.message()
+                                 + ". The previous app could not be restored: " + restoreError.message()
+                                 + ". It remains at " + backup.string());
+        }
+        else
+        {
+            writeStatus (status, "Could not install the new app bundle: " + error.message()
+                                 + ". The previous app was restored.");
+            fs::remove_all (staging);
+        }
         return 1;
     }
 
@@ -171,7 +236,7 @@ int installMac (pid_t pid, const fs::path& archive, const fs::path& target, cons
 
 int main (int argc, char** argv)
 {
-    if (argc != 6)
+    if (argc != 6 && argc != 7)
         return 2;
     const std::string mode (argv[1]);
     const auto pid = static_cast<pid_t> (std::stol (argv[2]));
@@ -180,7 +245,7 @@ int main (int argc, char** argv)
     const fs::path status (argv[5]);
 
     if (mode == "--linux")
-        return installLinux (pid, source, target, status);
+        return installLinux (pid, source, target, status, argc == 7 ? fs::path (argv[6]) : fs::path());
 #if defined(__APPLE__)
     if (mode == "--mac")
         return installMac (pid, source, target, status);

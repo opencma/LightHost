@@ -178,26 +178,65 @@ On Windows, build the installer after building the application:
 cmake --build build --config Release --target LightHostSetup
 ```
 
-The self-contained installer is `build\Release\Light Host Setup.exe`. It installs
-or upgrades the app in the current user's local application data and creates a
-Start menu shortcut. The updater runs this installer with the current
-application directory, so an installation outside the default location is
-updated in place. Existing plugin settings are not removed.
+The network installer is `build\Release\Light Host Setup.exe`. It downloads and
+SHA-256-verifies the application from the update manifest before installing or
+upgrading it in the current user's local application data. It offers optional
+Start menu and desktop shortcuts. The updater runs this installer with the
+current application directory, so an installation outside the default location
+is updated in place. Existing plugin settings are not removed.
 
-On Linux, the release asset is the app executable. The updater installs it
-beside the running executable, then closes and restarts Light Host. The app
-directory must be writable by the current user; system-wide installations
-requiring administrator permissions are not updated automatically. The Linux
-release archive must include `LightHostUpdater` beside `Light Host`.
+Windows releases require two manifest entries per architecture: `windows-x64`
+or `windows-arm64` for the network installer, and `windows-x64-package` or
+`windows-arm64-package` for the matching raw application executable. Publish
+both GitHub Release assets and their exact hashes before deploying the manifest.
+
+On Linux, the graphical network installer downloads the architecture-specific
+ZIP package and installs the app and updater into `~/.local/share/Light Host`.
+It offers application menu and desktop shortcuts. Downloads may need to be made
+executable before launching (for example `chmod +x LightHostSetup-linux-x64`).
+The updater verifies the ZIP, replaces both binaries, and restarts the app.
+The install directory must be writable. The Linux build requires libcurl
+development headers, and the installed app and installer require libcurl at
+runtime for HTTPS.
 
 On macOS, the release asset is a ZIP containing `Light Host.app`. The updater
 replaces the app bundle and reopens it; the installed bundle location must be
 writable by the current user. Unsigned or unnotarized app bundles may be blocked
 by Gatekeeper. This project does not currently sign or notarize macOS builds. 
 
+The macOS `.pkg` network installer downloads and verifies the app ZIP and
+installs it in the logged-in user's `~/Applications`. It is built by the macOS
+GitHub Actions jobs and can be signed and notarized when Apple credentials are
+available. Installation may require administrator authorization. Close Light
+Host before installing over an existing copy.
+
 > *Human note:* Please raise an issue if you are interested in me getting this signed
 
 The manifest must contain a URL and SHA-256 for the running architecture:
-`windows-x64`, `windows-arm64`, `linux-x64`, `linux-arm64`, `macos-x64`, or
-`macos-arm64`. Updates are not offered until a newer version and matching
-platform asset are published.
+`windows-x64`, `windows-arm64`, `linux-x64-package`, `linux-arm64-package`,
+`macos-x64`, or `macos-arm64`. Updates are not offered until a newer version
+and matching platform asset are published.
+
+The GitHub Actions Windows and Linux/macOS workflows produce architecture-specific
+application packages, installers, and checksum files. Upload each installer and
+its matching package as separate release assets. For Linux, the `-package`
+manifest key points to the app ZIP; for macOS, the platform key points to the
+app ZIP. Windows requires both its installer key and its `-package` app key as
+described above.
+
+Earlier Linux builds expect a standalone executable under `linux-x64` or
+`linux-arm64`, not a ZIP. The new manifest deliberately omits those keys to
+avoid breaking their updates. Users of those builds must run the new network
+installer once; subsequent upgrades use the ZIP package automatically.
+
+After collecting the installer and app artifacts in one folder, generate a
+new manifest in PowerShell (do not deploy it until the release files are uploaded):
+
+```powershell
+.\Utilities\GenerateUpdateManifest.ps1 -AssetDirectory 'C:\path\to\release-assets' `
+    -Version '1.2.2' -OutputPath 'C:\path\to\new-lighthost-manifest.json'
+```
+
+The script requires all six app/update assets and both Windows installers.
+The Linux and macOS installer files are separate release downloads and are not
+used by the update manifest.
