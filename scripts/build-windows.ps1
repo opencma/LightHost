@@ -122,6 +122,22 @@ else {
     )
 }
 
+# Keep actionable popup rows consistent with the host's clickable controls.
+$popupCursorPatch = Join-Path $repositoryRoot 'patches\juce-popup-cursor.patch'
+if (-not ([System.IO.File]::ReadAllText($popupSource)).Contains('Light Host uses a hand only')) {
+    Invoke-CheckedCommand -FilePath 'git' -Arguments @(
+        '-C', $jucePath, 'apply', '--check', '--ignore-space-change', $popupCursorPatch
+    )
+    Invoke-CheckedCommand -FilePath 'git' -Arguments @(
+        '-C', $jucePath, 'apply', '--ignore-space-change', $popupCursorPatch
+    )
+}
+else {
+    Invoke-CheckedCommand -FilePath 'git' -Arguments @(
+        '-C', $jucePath, 'apply', '--reverse', '--check', '--ignore-space-change', $popupCursorPatch
+    )
+}
+
 $vswherePath = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path $vswherePath)) {
     throw 'Visual Studio 2022 with the Desktop development with C++ workload is required.'

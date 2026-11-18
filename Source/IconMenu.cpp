@@ -13,7 +13,7 @@
 #include "AudioSetup.h"
 #include "PluginState.h"
 #include "PluginBackup.h"
-#include "HostDesign.h"
+#include "HostLookAndFeel.h"
 #include <algorithm>
 #include <ctime>
 #include <functional>
@@ -178,6 +178,7 @@ public:
 
     void resized() override
     {
+        improveTextReadability (*this);
         AudioDeviceSelectorComponent::resized();
 
         ComboBox* deviceType = nullptr;
@@ -212,6 +213,27 @@ public:
     }
 
 private:
+    static void improveTextReadability (Component& parent)
+    {
+        for (int i = 0; i < parent.getNumChildComponents(); ++i)
+        {
+            Component& child = *parent.getChildComponent (i);
+            if (auto* label = dynamic_cast<Label*> (&child))
+            {
+                label->setFont (HostDesign::bodyFont (16.0f));
+                label->setMinimumHorizontalScale (1.0f);
+                if (label->getText() == "Active output channels:")
+                    label->setText ("Output channels:", dontSendNotification);
+                else if (label->getText() == "Active input channels:")
+                    label->setText ("Input channels:", dontSendNotification);
+            }
+            if (auto* list = dynamic_cast<ListBox*> (&child))
+                // JUCE derives channel text size from the row height (60%).
+                list->setRowHeight (27);
+            improveTextReadability (child);
+        }
+    }
+
     static void shiftChildrenFromY (Component& parent, int y, int amount)
     {
         for (int i = 0; i < parent.getNumChildComponents(); ++i)
@@ -298,8 +320,8 @@ public:
     {
         if (canScrollUp)
         {
-            ColourGradient fade (Colour (0xf2FFFFFF), 0.0f, 0.0f,
-                                 Colour (0x00FFFFFF), 0.0f, 22.0f, false);
+            ColourGradient fade (HostDesign::canvas.withAlpha(0.95f), 0.0f, 0.0f,
+                                 HostDesign::canvas.withAlpha(0.0f), 0.0f, 22.0f, false);
             g.setGradientFill (fade);
             g.fillRect (getLocalBounds().removeFromTop (22));
         }
@@ -308,8 +330,8 @@ public:
         {
             const int hintHeight = 28;
             const int hintTop = getHeight() - hintHeight;
-            ColourGradient fade (Colour (0x00FFFFFF), 0.0f, (float) hintTop,
-                                 Colour (0xf2FFFFFF), 0.0f, (float) getHeight(), false);
+            ColourGradient fade (HostDesign::canvas.withAlpha(0.0f), 0.0f, (float) hintTop,
+                                 HostDesign::canvas.withAlpha(0.95f), 0.0f, (float) getHeight(), false);
             g.setGradientFill (fade);
             g.fillRect (0, hintTop, getWidth(), hintHeight);
 
@@ -319,6 +341,7 @@ public:
             chevron.startNewSubPath (x - 3.0f, y - 2.0f);
             chevron.lineTo (x, y + 1.0f);
             chevron.lineTo (x + 3.0f, y - 2.0f);
+            g.setColour(HostDesign::secondary);
             g.strokePath (chevron, PathStrokeType (1.5f, PathStrokeType::curved,
                                                     PathStrokeType::rounded));
         }
@@ -355,6 +378,9 @@ public:
         addAndMakeVisible (runOnStartupButton);
         invertIconButton.addListener (this);
         addAndMakeVisible (invertIconButton);
+        darkModeButton.setToggleState(HostDesign::isDarkMode(), dontSendNotification);
+        darkModeButton.addListener(this);
+        addAndMakeVisible(darkModeButton);
 
         importButton.setButtonText ("Import...");
         importButton.addListener (this);
@@ -364,7 +390,7 @@ public:
         addAndMakeVisible (exportButton);
 
         deleteButton.setButtonText ("Delete plugin states...");
-        deleteButton.setColour (TextButton::buttonColourId, HostDesign::canvas);
+        deleteButton.setColour (TextButton::buttonColourId, HostDesign::control);
         deleteButton.setColour (TextButton::textColourOnId, HostDesign::danger);
         deleteButton.setColour (TextButton::textColourOffId, HostDesign::danger);
         deleteButton.addListener (this);
@@ -389,6 +415,14 @@ public:
 #endif
     }
 
+    void lookAndFeelChanged() override
+    {
+        darkModeButton.setToggleState(HostDesign::isDarkMode(), dontSendNotification);
+        deleteButton.setColour(TextButton::buttonColourId, HostDesign::control);
+        deleteButton.setColour(TextButton::textColourOnId, HostDesign::danger);
+        deleteButton.setColour(TextButton::textColourOffId, HostDesign::danger);
+    }
+
     void paint (Graphics& g) override
     {
         HostDesign::drawPanel (g, audioCard);
@@ -397,30 +431,25 @@ public:
         g.setFont (Font (21.0f, Font::bold));
         g.drawText ("Audio", 0, 0, audioCard.getWidth(), 28, Justification::centredLeft);
         g.drawText ("App", appCard.getX(), 0, appCard.getWidth(), 28, Justification::centredLeft);
-        g.drawText ("Backup & restore", appCard.getX(), 168, appCard.getWidth(), 28, Justification::centredLeft);
-        g.drawText ("Plugin states", appCard.getX(), 322, appCard.getWidth(), 28, Justification::centredLeft);
+        g.drawText ("Backup & restore", appCard.getX(), 220, appCard.getWidth(), 28, Justification::centredLeft);
+        g.drawText ("Plugin states", appCard.getX(), 374, appCard.getWidth(), 28, Justification::centredLeft);
         g.setColour (HostDesign::border);
         g.drawHorizontalLine (appCard.getY() + 52, (float) appCard.getX() + 16,
                               (float) appCard.getRight() - 16);
+        g.drawHorizontalLine (appCard.getY() + 104, (float) appCard.getX() + 16,
+                              (float) appCard.getRight() - 16);
         g.drawHorizontalLine (getHeight() - 68, 0.0f, (float) audioCard.getRight());
         g.setColour (HostDesign::secondary);
-        g.setFont (HostDesign::bodyFont(15.0f));
+        g.setFont (HostDesign::bodyFont(16.0f));
         g.drawFittedText ("Keep your settings, plugin states, and available plugin files together.",
-            appCard.getX(), 204, appCard.getWidth(), 42, Justification::topLeft, 3);
-        g.drawText (".lightbak backup files", appCard.getX(), 290, appCard.getWidth(), 18, Justification::centredLeft);
-        g.drawText ("Reset saved settings for your effects.", appCard.getX(), 356,
+            appCard.getX(), 256, appCard.getWidth(), 44, Justification::topLeft, 2, 1.0f);
+        g.drawText (".lightbak backup files", appCard.getX(), 342, appCard.getWidth(), 22, Justification::centredLeft);
+        g.drawText ("Reset saved settings for your effects.", appCard.getX(), 408,
             appCard.getWidth(), 22, Justification::centredLeft);
         g.drawText ("Up to two input and two output channels.", 0, audioCard.getBottom() + 8,
             audioCard.getWidth(), 20, Justification::centredLeft);
         g.drawFittedText ("Reopen the device and reload effects.\nAudio pauses briefly; plugin editors close.",
-            0, getHeight() - 54, audioCard.getWidth() - 150, 42, Justification::centredLeft, 2);
-#if JUCE_WINDOWS
-        const String backgroundHint ("Light Host keeps running in the system tray.");
-#else
-        const String backgroundHint ("Light Host keeps running in the menu bar.");
-#endif
-        g.drawFittedText (backgroundHint, appCard.getX(), 440, appCard.getWidth(), 36,
-                         Justification::topLeft, 2);
+            0, getHeight() - 58, audioCard.getWidth() - 150, 52, Justification::centredLeft, 3, 1.0f);
     }
 
     void resized() override
@@ -430,7 +459,7 @@ public:
         const int cardWidth = (area.getWidth() - gap) * 60 / 100;
         audioCard = area.removeFromLeft (cardWidth).withTrimmedTop (36).withTrimmedBottom (108);
         area.removeFromLeft (gap);
-        appCard = area.withY (36).withHeight (104);
+        appCard = area.withY (36).withHeight (156);
         restartAudioButton.setBounds (audioCard.getRight() - 136, getHeight() - 52, 136, 34);
 
         juce::Rectangle<int> audioContents = audioCard.reduced (10);
@@ -442,16 +471,25 @@ public:
 
         juce::Rectangle<int> appContents = appCard.reduced (16, 0);
         runOnStartupButton.setBounds (appContents.removeFromTop (52));
-        invertIconButton.setBounds (appContents);
-        juce::Rectangle<int> backupButtons (appCard.getX(), 254, appCard.getWidth(), 34);
+        invertIconButton.setBounds (appContents.removeFromTop (52));
+        darkModeButton.setBounds(appContents);
+        juce::Rectangle<int> backupButtons (appCard.getX(), 306, appCard.getWidth(), 34);
         exportButton.setBounds (backupButtons.removeFromLeft ((backupButtons.getWidth() - 10) / 2));
         backupButtons.removeFromLeft (10);
         importButton.setBounds (backupButtons);
-        deleteButton.setBounds (appCard.getX(), 388, appCard.getWidth(), 34);
+        deleteButton.setBounds (appCard.getX(), 440, appCard.getWidth(), 34);
     }
 
     void buttonClicked (Button* button) override
     {
+        if (button == &darkModeButton)
+        {
+            const bool dark = darkModeButton.getToggleState();
+            getAppProperties().getUserSettings()->setValue("darkMode", dark);
+            if (auto* theme = dynamic_cast<LightHostLookAndFeel*>(&getLookAndFeel()))
+                theme->applyDarkMode(dark);
+            return;
+        }
         if (button == &restartAudioButton)
         {
             owner.restartAudio();
@@ -504,6 +542,7 @@ private:
     AudioScrollIndicator audioScrollIndicator;
     HostDesign::Switch runOnStartupButton {"Run on startup"};
     HostDesign::Switch invertIconButton {"Invert tray icon"};
+    HostDesign::Switch darkModeButton {"Dark mode"};
     TextButton importButton, exportButton, deleteButton, restartAudioButton;
     juce::Rectangle<int> audioCard, appCard;
 };
@@ -521,14 +560,20 @@ public:
         version.setText ("Version " + String (ProjectInfo::versionString), dontSendNotification);
         version.setFont (HostDesign::bodyFont(15.0f));
         version.setJustificationType (Justification::centred);
-        version.setColour (Label::textColourId, Colour (0xff686F7B));
+        version.setColour (Label::textColourId, HostDesign::secondary);
         addAndMakeVisible (version);
 
         credit.setText ("A lightweight stereo effects host.\nBuilt with JUCE. Created by Rolando Islas.", dontSendNotification);
         credit.setJustificationType (Justification::centred);
         credit.setFont (HostDesign::bodyFont(15.0f));
-        credit.setColour (Label::textColourId, Colour (0xff686F7B));
+        credit.setColour (Label::textColourId, HostDesign::secondary);
         addAndMakeVisible (credit);
+    }
+
+    void lookAndFeelChanged() override
+    {
+        version.setColour(Label::textColourId, HostDesign::secondary);
+        credit.setColour(Label::textColourId, HostDesign::secondary);
     }
 
     void paint (Graphics& g) override
@@ -597,6 +642,13 @@ public:
 	}
 
 	void focusLibrary() { library.focusSearch(); }
+	void importPlugins() { library.importPlugins(); }
+
+	void lookAndFeelChanged() override
+	{
+		activePlugins.setColour(ListBox::backgroundColourId, HostDesign::canvas);
+		activeEmptyState.setColour(Label::textColourId, HostDesign::secondary);
+	}
 
 	void refreshActivePlugins()
 	{
@@ -731,7 +783,7 @@ private:
 		g.setColour(HostDesign::border);
 		g.drawVerticalLine(60, 0, (float) height);
 		const juce::Rectangle<float> card(40, 6, (float) width - 44, (float) height - 12);
-		g.setColour(selected ? HostDesign::selection : row == hoveredRow ? HostDesign::surface : HostDesign::canvas);
+		g.setColour(selected ? HostDesign::selection : (!HostDesign::isDarkMode() && row == hoveredRow) ? HostDesign::surface : HostDesign::canvas);
 		g.fillRoundedRectangle(card, 10);
 		g.setColour(selected ? HostDesign::accent : HostDesign::border);
 		g.drawRoundedRectangle(card.reduced(0.5f), 10, 1);
@@ -751,13 +803,12 @@ private:
 		g.drawText(plugin.pluginFormatName + " / " + HostDesign::effectStatus(available, bypassed),
 			114, 32, width - 208, 20, Justification::centredLeft);
 		const auto powerBounds = getBypassBounds(width, height).toFloat();
-		g.setColour(HostDesign::powerColour(available, bypassed));
-		g.fillRoundedRectangle(powerBounds, 7);
-		HostDesign::drawSymbol(g, HostDesign::power, powerBounds.reduced(6), Colours::white);
+		HostDesign::drawPowerButton(g, powerBounds, available, bypassed,
+			row == hoveredRow && hoveredAction == bypassActivePluginAction);
 		const auto menuBounds = getMenuBounds(width, height).toFloat();
 		if (row == hoveredRow && hoveredAction == menuActivePluginAction)
 		{
-			g.setColour(Colour(0xffE8EBEF));
+			g.setColour(HostDesign::border);
 			g.fillRoundedRectangle(menuBounds, 7);
 		}
 		HostDesign::drawSymbol(g, HostDesign::more, menuBounds.reduced(5), HostDesign::secondary);
@@ -1077,8 +1128,9 @@ class IconMenu::PluginListWindow : public DocumentWindow
 {
 public:
 	explicit PluginListWindow(IconMenu& owner_)
-		: DocumentWindow("Light Host", Colours::white,
+		: DocumentWindow("Light Host", HostDesign::canvas,
 			DocumentWindow::allButtons),
+		owner(owner_),
 		content(new LightHostMainWindowContent(owner_))
 	{
 		setContentOwned(content, true);
@@ -1086,8 +1138,32 @@ public:
 		setResizable(true, false);
 		setResizeLimits(1000, 660, 10000, 10000);
 		centreWithSize(1180, 780);
+		restoreWindowStateFromString(getAppProperties().getUserSettings()->getValue("mainWindowState"));
 		setVisible(true);
+		HostDesign::updateNativeTitleBar(*this);
+		restoringWindowState = false;
 	}
+
+    ~PluginListWindow() override { saveWindowState(); }
+
+    void moved() override
+    {
+        DocumentWindow::moved();
+        saveWindowState();
+    }
+
+    void resized() override
+    {
+        DocumentWindow::resized();
+        saveWindowState();
+    }
+
+    void lookAndFeelChanged() override
+    {
+        DocumentWindow::lookAndFeelChanged();
+        setBackgroundColour(HostDesign::canvas);
+        HostDesign::updateNativeTitleBar(*this);
+    }
 
 	void refreshActivePlugins()
 	{
@@ -1108,20 +1184,30 @@ public:
         if (content != nullptr) content->refreshStartupState();
     }
 
-	void closeButtonPressed()
+	void closeButtonPressed() override
 	{
+		saveWindowState();
 		setVisible(false);
 	}
 
     void visibilityChanged() override
     {
         DocumentWindow::visibilityChanged();
-        // A closed window stays alive in the tray. Poll only while it is visible.
-        if (content != nullptr) content->setStatusUpdatesEnabled(isVisible());
+        // Minimized and tray windows both leave the audio engine running.
+        if (content != nullptr) content->setStatusUpdatesEnabled(isVisible() && !isMinimised());
     }
 
 private:
+	void saveWindowState()
+	{
+		// Settings batches move/resize writes. Preserve imported settings during restart.
+		if (!restoringWindowState && !owner.settingsImported)
+			getAppProperties().getUserSettings()->setValue("mainWindowState", getWindowStateAsString());
+	}
+
+	IconMenu& owner;
 	LightHostMainWindowContent* content; // Owned by DocumentWindow.
+	bool restoringWindowState = true;
 };
 
 IconMenu::IconMenu() : INDEX_EDIT(1000000), INDEX_BYPASS(2000000), INDEX_DELETE(3000000),

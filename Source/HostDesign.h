@@ -7,10 +7,66 @@
 // Shared by the host's controls. Plugin-provided editors keep their own styling.
 namespace HostDesign
 {
-const Colour canvas (0xffFFFFFF), sidebar (0xffF5F6F8), surface (0xffFAFBFC);
-const Colour text (0xff202329), secondary (0xff4E5663), border (0xffDEE2E8);
-const Colour accent (0xff0078D4), selection (0xffEAF3FC), green (0xff278650);
-const Colour danger (0xffC42B32), warning (0xffAC6500);
+struct Palette
+{
+    explicit Palette(bool dark_ = true)
+        : dark(dark_),
+          canvas(dark ? 0xff161616 : 0xffFFFFFF),
+          sidebar(dark ? 0xff1B1B1B : 0xffF5F6F8),
+          surface(dark ? 0xff2F2F2F : 0xffFAFBFC),
+          control(dark ? 0xff363636 : 0xffFFFFFF),
+          text(dark ? 0xffFFFFFF : 0xff202329),
+          secondary(dark ? 0xffAEAEAE : 0xff4E5663),
+          border(dark ? 0xff3C3C3C : 0xffDEE2E8),
+          accent(dark ? 0xff0A84FF : 0xff0078D4),
+          selection(dark ? 0xff183D63 : 0xffEAF3FC),
+          green(dark ? 0xff32D74B : 0xff278650),
+          danger(dark ? 0xffFF6961 : 0xffC42B32),
+          warning(dark ? 0xffFFB340 : 0xffAC6500),
+          switchOff(dark ? 0xff636363 : 0xffD6DBE2),
+          scrollThumb(dark ? 0xff747474 : 0xffA4ACB7) {}
+
+    bool dark;
+    Colour canvas, sidebar, surface, control, text, secondary, border, accent,
+           selection, green, danger, warning, switchOff, scrollThumb;
+};
+
+// One palette across translation units; references stay valid when appearance changes.
+inline Palette& palette() { static Palette value; return value; }
+inline void setDarkMode(bool dark) { palette() = Palette(dark); }
+inline bool isDarkMode() { return palette().dark; }
+static const Colour& canvas = palette().canvas;
+static const Colour& sidebar = palette().sidebar;
+static const Colour& surface = palette().surface;
+static const Colour& control = palette().control;
+static const Colour& text = palette().text;
+static const Colour& secondary = palette().secondary;
+static const Colour& border = palette().border;
+static const Colour& accent = palette().accent;
+static const Colour& selection = palette().selection;
+static const Colour& green = palette().green;
+static const Colour& danger = palette().danger;
+static const Colour& warning = palette().warning;
+
+inline void updateNativeTitleBar(Component& window)
+{
+#if JUCE_WINDOWS
+    if (auto* peer = window.getPeer())
+    {
+        DynamicLibrary dwm("dwmapi.dll");
+        using SetAttribute = long (__stdcall*)(void*, unsigned long, const void*, unsigned long);
+        if (auto setAttribute = reinterpret_cast<SetAttribute>(dwm.getFunction("DwmSetWindowAttribute")))
+        {
+            const int dark = isDarkMode() ? 1 : 0;
+            // Windows 10 before 20H1 uses attribute 19; newer versions use 20.
+            if (setAttribute(peer->getNativeHandle(), 20, &dark, sizeof(dark)) < 0)
+                setAttribute(peer->getNativeHandle(), 19, &dark, sizeof(dark));
+        }
+    }
+#else
+    ignoreUnused(window);
+#endif
+}
 const float controlRadius = 8.0f, popupRadius = 10.0f;
 const int menuRowHeight = 34, scrollbarWidth = 10;
 // Leave room for the complete rounded shadow inside the transparent native window.
@@ -56,8 +112,8 @@ inline void drawPopupSurface(Graphics& g, int width, int height)
     const auto panel = Rectangle<float>(0, 0, (float) width, (float) height).reduced((float) popupShadowMargin);
     Path path;
     path.addRoundedRectangle(panel, popupRadius);
-    DropShadow(Colours::black.withAlpha(0.13f), 6, Point<int>(0, 2)).drawForPath(g, path);
-    g.setColour(canvas);
+    DropShadow(Colours::black.withAlpha(isDarkMode() ? 0.35f : 0.13f), 6, Point<int>(0, 2)).drawForPath(g, path);
+    g.setColour(isDarkMode() ? surface : canvas);
     g.fillPath(path);
     g.setColour(border);
     g.strokePath(path, PathStrokeType(1));
@@ -79,23 +135,23 @@ public:
                                       buttonBounds.getCentreY() - 10.0f, 38.0f, 20.0f);
         const bool enabled = getToggleState();
 
-        Colour trackColour = enabled ? Colour (0xff0078D4) : Colour (0xffD6DBE2);
+        Colour trackColour = enabled ? accent : palette().switchOff;
         if (isMouseOverButton || isButtonDown)
             trackColour = trackColour.brighter (isButtonDown ? 0.12f : 0.06f);
-        g.setColour (trackColour);
+        g.setColour (trackColour.withMultipliedAlpha(isEnabled() ? 1.0f : 0.5f));
         g.fillRoundedRectangle (track, 10.0f);
         g.setColour (Colours::white);
         const float thumbX = enabled ? track.getRight() - 18.0f : track.getX() + 2.0f;
         g.fillEllipse (thumbX, track.getY() + 2.0f, 16.0f, 16.0f);
 
-        g.setColour (Colour (0xff202329).withAlpha (isEnabled() ? 1.0f : 0.5f));
-        g.setFont (HostDesign::bodyFont(15.0f));
+        g.setColour (HostDesign::text.withAlpha (isEnabled() ? 1.0f : 0.5f));
+        g.setFont (HostDesign::bodyFont(16.0f));
         g.drawText (getButtonText(), 0, 0, getWidth() - 52, getHeight(),
                     Justification::centredLeft, true);
 
         if (hasKeyboardFocus (false))
         {
-            g.setColour (Colour (0xff0078D4));
+            g.setColour (accent);
             g.drawRoundedRectangle (buttonBounds.reduced (0.5f), 5.0f, 1.0f);
         }
 
@@ -108,6 +164,7 @@ public:
     SwitchMenuItem(const String& label, bool enabled) : CustomComponent(true), toggle(label)
     {
         setName(label);
+        setMouseCursor(MouseCursor::PointingHandCursor);
         toggle.setToggleState(enabled, dontSendNotification);
         // Let the menu handle the whole row, including keyboard selection.
         toggle.setInterceptsMouseClicks(false, false);
@@ -220,6 +277,21 @@ inline void drawSymbol (Graphics& g, Symbol symbol, Rectangle<float> bounds, Col
     g.strokePath (p, PathStrokeType (1.6f, PathStrokeType::curved, PathStrokeType::rounded));
 }
 
+inline void drawPowerButton(Graphics& g, Rectangle<float> bounds, bool available, bool bypassed, bool hovered)
+{
+    const bool darkBypass = isDarkMode() && bypassed;
+    Colour fill = darkBypass ? control : powerColour(available, bypassed);
+    if (darkBypass && hovered) fill = fill.overlaidWith(accent.withAlpha(0.10f));
+    g.setColour(fill);
+    g.fillRoundedRectangle(bounds, 7);
+    if (darkBypass)
+    {
+        g.setColour(border);
+        g.drawRoundedRectangle(bounds.reduced(0.5f), 7, 1);
+    }
+    drawSymbol(g, power, bounds.reduced(6), darkBypass ? text : Colours::white);
+}
+
 inline void drawPanel (Graphics& g, Rectangle<int> bounds)
 {
     g.setColour (canvas);
@@ -241,10 +313,10 @@ public:
     {
         if (getToggleState() || hovered || pressed)
         {
-            g.setColour (getToggleState() ? Colour (0xffE1EDF9) : Colour (0xffEAECF0));
+            g.setColour (getToggleState() ? selection : border.withAlpha(0.45f));
             g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (1), 7);
         }
-        Colour ink = getToggleState() ? accent.darker (0.2f) : HostDesign::text;
+        Colour ink = getToggleState() ? (isDarkMode() ? HostDesign::text : accent.darker (0.2f)) : HostDesign::text;
         drawSymbol (g, symbol, Rectangle<float> (13, getHeight() / 2.0f - 10, 20, 20), ink);
         g.setColour (ink);
         g.setFont (getToggleState() ? Font (16.0f, Font::bold) : bodyFont(16.0f));

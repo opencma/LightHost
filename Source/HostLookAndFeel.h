@@ -12,40 +12,91 @@ public:
 #if JUCE_WINDOWS
         setDefaultSansSerifTypefaceName ("Segoe UI");
 #endif
+        refreshPalette();
+    }
+
+    void refreshPalette()
+    {
         setColour (Label::textColourId, HostDesign::text);
         setColour (ComboBox::textColourId, HostDesign::text);
         setColour (ListBox::outlineColourId, Colours::transparentBlack);
-        setColour (ResizableWindow::backgroundColourId, Colour (0xffFAFBFC));
-        setColour (DocumentWindow::backgroundColourId, Colour (0xffFAFBFC));
-        setColour (TextEditor::backgroundColourId, Colours::white);
-        setColour (TextEditor::textColourId, Colour (0xff202329));
-        setColour (TextEditor::highlightColourId, Colour (0xffEAF3FC));
-        setColour (TextEditor::highlightedTextColourId, Colour (0xff0067B8));
-        setColour (TextEditor::outlineColourId, Colour (0xffD6DBE2));
-        setColour (TextButton::buttonColourId, Colour (0xffFFFFFF));
-        setColour (TextButton::buttonOnColourId, Colour (0xff0078D4));
+        setColour (ResizableWindow::backgroundColourId, HostDesign::canvas);
+        setColour (DocumentWindow::backgroundColourId, HostDesign::canvas);
+        setColour (TextEditor::backgroundColourId, HostDesign::control);
+        setColour (TextEditor::textColourId, HostDesign::text);
+        setColour (TextEditor::highlightColourId, HostDesign::selection);
+        setColour (TextEditor::highlightedTextColourId, HostDesign::text);
+        setColour (TextEditor::outlineColourId, HostDesign::border);
+        setColour (TextEditor::focusedOutlineColourId, HostDesign::accent);
+        setColour (CaretComponent::caretColourId, HostDesign::text);
+        setColour (TextButton::buttonColourId, HostDesign::control);
+        setColour (TextButton::buttonOnColourId, HostDesign::accent);
         setColour (TextButton::textColourOnId, Colours::white);
-        setColour (TextButton::textColourOffId, Colour (0xff202329));
-        setColour (ComboBox::backgroundColourId, Colour (0xffFFFFFF));
-        setColour (ComboBox::outlineColourId, Colour (0xffD6DBE2));
-        setColour (ComboBox::arrowColourId, Colour (0xff202329));
+        setColour (TextButton::textColourOffId, HostDesign::text);
+        setColour (ComboBox::backgroundColourId, HostDesign::control);
+        setColour (ComboBox::outlineColourId, HostDesign::border);
+        setColour (ComboBox::arrowColourId, HostDesign::text);
         setColour (PopupMenu::backgroundColourId, Colours::transparentBlack);
         setColour (PopupMenu::textColourId, HostDesign::text);
         setColour (PopupMenu::headerTextColourId, HostDesign::secondary);
         setColour (PopupMenu::highlightedBackgroundColourId, HostDesign::selection);
         setColour (PopupMenu::highlightedTextColourId, HostDesign::text);
         setColour (ToggleButton::tickColourId, Colour (0xffFFFFFF));
-        setColour (ToggleButton::textColourId, Colour (0xff202329));
-        setColour (ListBox::backgroundColourId, Colour (0xffFAFBFC));
-        setColour (ListBox::textColourId, Colour (0xff202329));
-        setColour (ScrollBar::thumbColourId, Colour (0xffA4ACB7));
+        setColour (ToggleButton::textColourId, HostDesign::text);
+        setColour (ListBox::backgroundColourId, HostDesign::canvas);
+        setColour (ListBox::textColourId, HostDesign::text);
+        setColour (ScrollBar::thumbColourId, HostDesign::palette().scrollThumb);
         setColour (ScrollBar::backgroundColourId, Colours::transparentBlack);
         setColour (AlertWindow::backgroundColourId, HostDesign::canvas);
         setColour (AlertWindow::textColourId, HostDesign::text);
         setColour (AlertWindow::outlineColourId, HostDesign::border);
         setColour (ProgressBar::backgroundColourId, HostDesign::sidebar);
         setColour (ProgressBar::foregroundColourId, HostDesign::accent);
-        setColour (HyperlinkButton::textColourId, Colour (0xff0067B8));
+        setColour (HyperlinkButton::textColourId, HostDesign::accent);
+        setColour (Slider::backgroundColourId, HostDesign::surface);
+        setColour (Slider::thumbColourId, HostDesign::accent);
+        setColour (Slider::trackColourId, HostDesign::accent);
+        setColour (Slider::textBoxTextColourId, HostDesign::text);
+        setColour (Slider::textBoxBackgroundColourId, HostDesign::control);
+        setColour (Slider::textBoxOutlineColourId, HostDesign::border);
+        setColour (DirectoryContentsDisplayComponent::textColourId, HostDesign::text);
+        setColour (DirectoryContentsDisplayComponent::highlightColourId, HostDesign::selection);
+    }
+
+    void applyDarkMode(bool dark)
+    {
+        HostDesign::setDarkMode(dark);
+        refreshPalette();
+        auto& desktop = Desktop::getInstance();
+        for (int i = 0; i < desktop.getNumComponents(); ++i)
+            desktop.getComponent(i)->sendLookAndFeelChange();
+    }
+
+    MouseCursor getMouseCursorFor(Component& component) override
+    {
+        if (!component.isEnabled()) return MouseCursor::NormalCursor;
+
+        const MouseCursor cursor = LookAndFeel_V3::getMouseCursorFor(component);
+        // Keep text insertion, resize, and drag cursors where controls request them.
+        if (cursor != MouseCursor::NormalCursor && cursor != MouseCursor::ParentCursor)
+            return cursor;
+
+        for (Component* control = &component; control != nullptr; control = control->getParentComponent())
+        {
+            if (dynamic_cast<TextEditor*>(control) != nullptr) return cursor;
+            if (dynamic_cast<Button*>(control) != nullptr || dynamic_cast<ComboBox*>(control) != nullptr
+                || dynamic_cast<Slider*>(control) != nullptr || dynamic_cast<ScrollBar*>(control) != nullptr)
+                return MouseCursor::PointingHandCursor;
+
+            if (auto* list = dynamic_cast<ListBox*>(control))
+            {
+                const auto position = list->getMouseXYRelative();
+                const int row = list->getRowContainingPosition(position.x, position.y);
+                return list->getModel() != nullptr && isPositiveAndBelow(row, list->getModel()->getNumRows())
+                    ? MouseCursor::PointingHandCursor : cursor;
+            }
+        }
+        return cursor;
     }
 
     Typeface::Ptr getTypefaceForFont (const Font& font) override
@@ -254,24 +305,61 @@ public:
         g.drawHorizontalLine (header.getHeight() - 1, 0.0f, (float) header.getWidth());
     }
 
+    void drawTableHeaderColumn(Graphics& g, const String& name, int, int width, int height,
+                               bool hovered, bool pressed, int flags) override
+    {
+        if (hovered || pressed) g.fillAll(HostDesign::selection);
+        auto area = Rectangle<int>(width, height).reduced(8, 0);
+        g.setColour(HostDesign::text);
+        if ((flags & (TableHeaderComponent::sortedForwards | TableHeaderComponent::sortedBackwards)) != 0)
+        {
+            auto arrow = area.removeFromRight(16).toFloat().reduced(3, height * 0.35f);
+            Path path;
+            const bool forwards = (flags & TableHeaderComponent::sortedForwards) != 0;
+            path.addTriangle(arrow.getX(), forwards ? arrow.getBottom() : arrow.getY(),
+                             arrow.getCentreX(), forwards ? arrow.getY() : arrow.getBottom(),
+                             arrow.getRight(), forwards ? arrow.getBottom() : arrow.getY());
+            g.fillPath(path);
+        }
+        g.setFont(HostDesign::bodyFont(15));
+        g.drawFittedText(name, area, Justification::centredLeft, 1);
+    }
+
+    void drawLevelMeter(Graphics& g, int width, int height, float level) override
+    {
+        const auto bounds = Rectangle<float>(0, 0, (float) width, (float) height).reduced(0.5f);
+        g.setColour(HostDesign::control);
+        g.fillRoundedRectangle(bounds, 5);
+        g.setColour(HostDesign::border);
+        g.drawRoundedRectangle(bounds, 5, 1);
+        const int blocks = 7;
+        const int lit = roundToInt(jlimit(0.0f, 1.0f, level) * blocks);
+        const float blockWidth = jmax(0.0f, (width - 6.0f) / blocks);
+        for (int i = 0; i < blocks; ++i)
+        {
+            g.setColour(i >= lit ? HostDesign::border : i == blocks - 1 ? HostDesign::danger : HostDesign::green);
+            g.fillRoundedRectangle(3 + i * blockWidth, 3, blockWidth * 0.75f, jmax(0.0f, height - 6.0f), 1);
+        }
+    }
+
     void drawButtonBackground (Graphics& g, Button& button, const Colour& background,
                                bool isMouseOverButton, bool isButtonDown) override
     {
         Colour fill = button.getToggleState() ? HostDesign::accent : background;
         if (isMouseOverButton)
-            fill = fill.overlaidWith (Colour (0xff0078D4).withAlpha (0.06f));
+            fill = fill.overlaidWith(HostDesign::accent.withAlpha(0.10f));
         if (isButtonDown)
-            fill = fill.overlaidWith (Colour (0xff0078D4).withAlpha (0.12f));
+            fill = fill.overlaidWith(HostDesign::accent.withAlpha(0.18f));
 
         const Rectangle<float> bounds = button.getLocalBounds().toFloat().reduced (0.5f);
         g.setColour (fill);
         g.fillRoundedRectangle (bounds, 8.0f);
-        g.setColour (button.getToggleState() ? Colour (0xffB6D6F2) : Colour (0xffD6DBE2));
+        g.setColour (button.getToggleState() ? HostDesign::accent : HostDesign::border);
         g.drawRoundedRectangle (bounds, 8.0f, 1.0f);
 
         if (button.hasKeyboardFocus (false))
         {
-            g.setColour (Colour (0xff0078D4));
+            g.setColour (HostDesign::accent);
             g.drawRoundedRectangle (bounds.reduced (2.0f), 6.0f, 1.0f);
         }
     }
@@ -285,7 +373,7 @@ public:
         g.setColour (box.findColour (ComboBox::backgroundColourId));
         g.fillRoundedRectangle (bounds, 8.0f);
         g.setColour (box.hasKeyboardFocus (false) || isButtonDown
-            ? Colour (0xff0078D4) : box.findColour (ComboBox::outlineColourId));
+            ? HostDesign::accent : box.findColour (ComboBox::outlineColourId));
         g.drawRoundedRectangle (bounds, 8.0f, 1.0f);
 
         const float centreX = (float) buttonX + (float) buttonW * 0.5f;
@@ -305,12 +393,12 @@ public:
     {
         const float side = jmin (14.0f, jmin (width, height));
         const Rectangle<float> box (x, y + (height - side) * 0.5f, side, side);
-        const Colour accent (0xff0078D4);
+        const Colour accent = HostDesign::accent;
 
-        g.setColour (ticked ? accent : Colours::white);
+        g.setColour (ticked ? accent : HostDesign::control);
         g.fillRoundedRectangle (box.reduced (0.5f), 3.0f);
         g.setColour (ticked || isMouseOverButton || isButtonDown
-            ? accent : Colour (0xff969DA8));
+            ? accent : HostDesign::secondary);
         g.drawRoundedRectangle (box.reduced (0.5f), 3.0f, 1.2f);
 
         if (ticked)
@@ -326,7 +414,7 @@ public:
 
         if (! isEnabled)
         {
-            g.setColour (Colours::white.withAlpha (0.45f));
+            g.setColour (HostDesign::canvas.withAlpha (0.45f));
             g.fillRoundedRectangle (box, 3.0f);
         }
     }

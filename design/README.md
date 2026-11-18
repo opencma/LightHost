@@ -16,7 +16,7 @@ These screenshots use an isolated copy of the saved configuration with the selec
 
 ## Direction
 
-A quiet native utility with the clarity and restraint of Apple's desktop apps: near-white surfaces, a soft gray sidebar, strong typography, fine separators, consistent outline icons, and a single blue accent. Color communicates selection and action; green indicates running audio, and red is reserved for destructive actions.
+A quiet native utility with the clarity and restraint of Apple's desktop apps: layered charcoal surfaces in dark mode, near-white surfaces in light mode, a softly separated sidebar, strong typography, fine separators, consistent outline icons, and a single blue accent. Color communicates selection and action; green indicates running audio, and red is reserved for destructive actions.
 
 The signal chain is the primary workspace. Input and output endpoints frame the ordered effects. Each effect shows its name, format, stereo layout, power control, and action menu. A plugin library sits alongside the chain so discovery and adding an effect remain close to the task.
 
@@ -84,3 +84,15 @@ Popup regression checks verify transparent corners and soft shadow pixels, hover
 ## Generation brief
 
 Two high-fidelity native desktop UI mockups were generated using the built-in imagegen tool. The first prompt specified Light Host's ordered stereo effect chain, bypass and rename/remove actions, adjacent plugin library, and restrained Apple-inspired typography and surfaces. The second used the first image as its style reference and specified matching audio device settings, app preferences, backup and restore, and saved-state deletion. Both prompts excluded transport, recording, mixer controls, charts, accounts, and unrelated features.
+
+## Dark appearance
+
+[Signal chain](dark-signal-chain-windows.png) · [Settings](dark-settings-windows.png) · [Control states](dark-controls-windows.png)
+
+Dark mode is the default. Settings > App > Dark mode changes the shared palette immediately and saves the preference beside the executable. The chain, library, search, settings, About view, dialogs, popups, scrollbars, and host controls refresh together without recreating the audio graph or plugin instances. Supported Windows versions also use dark native title bars. Plugin editor contents remain controlled by each plugin.
+
+The dark palette follows the supplied iMessage reference: a near-black canvas, neutral gray surfaces, white text, quiet separators, and a clear blue accent. Green, amber, and red retain their status meanings. Regression checks cover repeated dark/light changes, updating an existing library, retaining its search, and text contrast in both appearances.
+
+Dark mode uses a near-black canvas (`#161616`) with matching plugin cards, input/output endpoints, and settings panels outlined by subtle borders (`#3C3C3C`). Buttons retain their gray fill (`#363636`), and active controls and focus outlines use a blue accent (`#0A84FF`). Bypassed power buttons share the plus buttons' gray fill, border, hover tint, and white symbol brightness. Clickable host controls and actionable menu rows use a hand cursor; text fields and resizing retain their usual cursors. Disabled controls and empty list areas retain the arrow cursor.
+
+The Release build and regression suite pass. An isolated Windows profile verified both appearances at default and minimum sizes, preference persistence across restart, and a chain with two real LoudMax instances. The preview used no audio device.

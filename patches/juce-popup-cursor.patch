@@ -1,0 +1,14 @@
+diff --git a/modules/juce_gui_basics/menus/juce_PopupMenu.cpp b/modules/juce_gui_basics/menus/juce_PopupMenu.cpp
+--- a/modules/juce_gui_basics/menus/juce_PopupMenu.cpp
++++ b/modules/juce_gui_basics/menus/juce_PopupMenu.cpp
+@@ -78,6 +78,10 @@
+         isHighlighted (false)
+     {
++        // Light Host uses a hand only for actionable menu rows.
++        setMouseCursor (canBeTriggered (item) || hasActiveSubMenu (item)
++                            ? MouseCursor::PointingHandCursor : MouseCursor::NormalCursor);
++
+         if (item.isSectionHeader)
+             customComp = new HeaderItemComponent (item.text);
+ 
+         addAndMakeVisible (customComp);

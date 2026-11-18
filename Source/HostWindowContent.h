@@ -67,6 +67,12 @@ public:
     void refreshActivePlugins() { pluginsPanel->refreshActivePlugins(); }
     void refreshStartupState() { if (settingsPanel != nullptr) settingsPanel->refreshStartupState(); }
 
+    void lookAndFeelChanged() override
+    {
+        readyDetails.setColour(Label::textColourId, HostDesign::secondary);
+        timerCallback();
+    }
+
     bool keyPressed (const KeyPress& key) override
     {
         if (key.getModifiers().isCommandDown() && key.getKeyCode() == 'F')
@@ -138,7 +144,7 @@ private:
         if (button == &pluginsButton) setView (pluginsView);
         else if (button == &settingsButton) setView (settingsView);
         else if (button == &aboutButton) setView (aboutView);
-        else if (button == &addButton) pluginsPanel->focusLibrary();
+        else if (button == &addButton) pluginsPanel->importPlugins();
     }
 
     void timerCallback() override

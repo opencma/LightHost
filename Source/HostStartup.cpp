@@ -55,6 +55,8 @@ public:
         appProperties = new ApplicationProperties();
         appProperties->setStorageParameters (options);
 
+        HostDesign::setDarkMode(appProperties->getUserSettings()->getBoolValue("darkMode", true));
+        lookAndFeel.refreshPalette();
         LookAndFeel::setDefaultLookAndFeel (&lookAndFeel);
 
         mainWindow = new IconMenu();

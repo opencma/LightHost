@@ -18,6 +18,11 @@
 #if JUCE_INTEL
  #include <xmmintrin.h>
 #endif
+#if JUCE_WINDOWS
+ #define NOMINMAX
+ #define WIN32_LEAN_AND_MEAN
+ #include <windows.h>
+#endif
 
 namespace
 {
@@ -218,6 +223,98 @@ public:
     int blockSize = 64;
     double sampleRate = 48000.0;
 };
+
+void checkMinimizedAudioTiming()
+{
+#if JUCE_WINDOWS
+    using InformationFunction = BOOL (WINAPI*)(HANDLE, PROCESS_INFORMATION_CLASS, LPVOID, DWORD);
+    const auto kernel = GetModuleHandleW(L"kernel32.dll");
+    const auto read = reinterpret_cast<InformationFunction>(GetProcAddress(kernel, "GetProcessInformation"));
+    const auto write = reinterpret_cast<InformationFunction>(GetProcAddress(kernel, "SetProcessInformation"));
+    PROCESS_POWER_THROTTLING_STATE original = { PROCESS_POWER_THROTTLING_CURRENT_VERSION, 0, 0 };
+    if (read == nullptr || write == nullptr
+        || !read(GetCurrentProcess(), ProcessPowerThrottling, &original, sizeof(original)))
+    {
+        std::cout << "SKIP: Windows background timer policy API is unavailable\n";
+        return;
+    }
+    struct RestorePolicy
+    {
+        InformationFunction write;
+        PROCESS_POWER_THROTTLING_STATE original;
+        ~RestorePolicy() { write(GetCurrentProcess(), ProcessPowerThrottling, &original, sizeof(original)); }
+    } restorePolicy { write, original };
+
+    auto throttled = original;
+    throttled.ControlMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    throttled.StateMask |= PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION;
+    if (!write(GetCurrentProcess(), ProcessPowerThrottling, &throttled, sizeof(throttled)))
+    {
+        std::cout << "SKIP: Windows does not support background timer throttling\n";
+        return;
+    }
+
+    DocumentWindow window("Audio timing regression", Colours::black, DocumentWindow::allButtons);
+    window.setUsingNativeTitleBar(true);
+    window.setBounds(50, 50, 400, 300);
+    window.setVisible(true);
+    window.setMinimised(true);
+    MessageManager::getInstance()->runDispatchLoopUntil(20);
+    require(window.isMinimised(), "Native timing test window did not minimize");
+    const auto measureWait = []
+    {
+        const double started = Time::getMillisecondCounterHiRes();
+        for (int i = 0; i < 24; ++i) Thread::sleep(1);
+        return (Time::getMillisecondCounterHiRes() - started) / 24.0;
+    };
+    const double throttledWait = measureWait();
+    const File logFile = File::createTempFile(".log");
+    {
+        AudioPlayer player(logFile);
+        TestDevice device;
+        GainProcessor processor(2.0f);
+        player.audioDeviceAboutToStart(&device);
+        player.setProcessor(&processor);
+        AudioBuffer<float> input(2, 64), output(2, 64);
+        for (int channel = 0; channel < 2; ++channel)
+            for (int i = 0; i < 64; ++i) input.setSample(channel, i, 0.25f);
+        const auto checkProcessing = [&]
+        {
+            PROCESS_POWER_THROTTLING_STATE state = { PROCESS_POWER_THROTTLING_CURRENT_VERSION, 0, 0 };
+            require(read(GetCurrentProcess(), ProcessPowerThrottling, &state, sizeof(state))
+                    && (state.ControlMask & PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION) != 0
+                    && (state.StateMask & PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION) == 0,
+                    "Audio player did not protect high-resolution timers from background throttling");
+            require((state.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED)
+                        == (original.ControlMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED)
+                    && (state.StateMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED)
+                        == (original.StateMask & PROCESS_POWER_THROTTLING_EXECUTION_SPEED),
+                    "Timer protection changed an unrelated Windows power policy");
+            player.audioDeviceIOCallback(input.getArrayOfReadPointers(), 2, output.getArrayOfWritePointers(), 2, 64);
+            require(output.getSample(0, 0) == 0.5f && output.getSample(1, 63) == 0.5f,
+                    "A native window state changed audio processing");
+        };
+        checkProcessing(); // Minimized in the taskbar.
+        const double protectedWait = measureWait();
+        window.setMinimised(false);
+        MessageManager::getInstance()->runDispatchLoopUntil(20);
+        checkProcessing();
+        window.setVisible(false); // Closed to the tray.
+        checkProcessing();
+        require(processor.prepares == 1 && processor.releases == 0,
+                "Window minimize/restore/hide restarted the audio processor");
+        player.audioDeviceStopped();
+        player.setProcessor(nullptr);
+        std::cout << "PASS: native minimized/restored/hidden windows retain timer protection and audio; mean 1 ms wait: "
+                  << throttledWait << " ms throttled, " << protectedWait << " ms protected\n";
+    }
+    PROCESS_POWER_THROTTLING_STATE restored = { PROCESS_POWER_THROTTLING_CURRENT_VERSION, 0, 0 };
+    require(read(GetCurrentProcess(), ProcessPowerThrottling, &restored, sizeof(restored))
+            && restored.ControlMask == throttled.ControlMask && restored.StateMask == throttled.StateMask,
+            "Audio player shutdown did not restore the previous Windows timer policy");
+    require(logFile.deleteFile(), "Could not clean up timing test diagnostics");
+#endif
+}
 
 void checkAudioDenormals()
 {
@@ -753,6 +850,84 @@ void checkBypassPresentation()
                 "The power control did not change appearance when bypass was toggled");
 }
 
+void checkHostCursors()
+{
+    LightHostLookAndFeel theme;
+    TextButton button;
+    Label buttonLabel;
+    button.addAndMakeVisible(buttonLabel);
+    require(theme.getMouseCursorFor(button) == MouseCursor::PointingHandCursor
+            && theme.getMouseCursorFor(buttonLabel) == MouseCursor::PointingHandCursor,
+            "Clickable buttons or their labels do not show a hand");
+    button.setEnabled(false);
+    require(theme.getMouseCursorFor(buttonLabel) == MouseCursor::NormalCursor,
+            "Disabled button still shows a clickable cursor");
+    ComboBox combo;
+    require(theme.getMouseCursorFor(combo) == MouseCursor::PointingHandCursor
+            && theme.getMouseCursorFor(*combo.getChildComponent(0)) == MouseCursor::PointingHandCursor,
+            "Device selectors or their labels do not show a hand");
+    HostDesign::Switch toggle("Dark mode");
+    require(theme.getMouseCursorFor(toggle) == MouseCursor::PointingHandCursor,
+            "Settings switch does not show a hand");
+    TextEditor editor;
+    require(theme.getMouseCursorFor(editor) == MouseCursor::IBeamCursor,
+            "Text field lost its text insertion cursor");
+    Component background;
+    require(theme.getMouseCursorFor(background) == MouseCursor::NormalCursor,
+            "Noninteractive background shows a clickable cursor");
+    background.setMouseCursor(MouseCursor::LeftRightResizeCursor);
+    require(theme.getMouseCursorFor(background) == MouseCursor::LeftRightResizeCursor,
+            "Host styling replaced a resize cursor");
+}
+
+void checkAppearanceChanges()
+{
+    const bool previous = HostDesign::isDarkMode();
+    LightHostLookAndFeel theme;
+    KnownPluginList known;
+    PluginInstances active;
+    PluginLibraryView library(known, active);
+    library.setLookAndFeel(&theme);
+    library.setSize(380, 560);
+    library.addToDesktop(0);
+    auto* list = dynamic_cast<ListBox*>(library.getChildComponent(1));
+    auto* search = dynamic_cast<TextEditor*>(library.getChildComponent(0));
+    require(list != nullptr && search != nullptr, "Library controls missing");
+    search->setText("Preserve my search");
+    Colour darkCanvas;
+    const auto contrast = [](Colour a, Colour b)
+    {
+        const auto luminance = [](Colour colour)
+        {
+            const auto linear = [](float c) { return c <= 0.04045f ? c / 12.92f : std::pow((c + 0.055f) / 1.055f, 2.4f); };
+            return 0.2126f * linear(colour.getFloatRed()) + 0.7152f * linear(colour.getFloatGreen())
+                + 0.0722f * linear(colour.getFloatBlue());
+        };
+        const float x = luminance(a), y = luminance(b);
+        return (jmax(x, y) + 0.05f) / (jmin(x, y) + 0.05f);
+    };
+    for (bool dark : { true, false, true })
+    {
+        theme.applyDarkMode(dark);
+        require(HostDesign::isDarkMode() == dark, "Appearance mode did not change");
+        require((HostDesign::canvas.getPerceivedBrightness() < 0.3f) == dark,
+                "Canvas does not match selected appearance");
+        require(list->findColour(ListBox::backgroundColourId) == HostDesign::canvas
+                && search->findColour(TextEditor::backgroundColourId) == HostDesign::control
+                && search->findColour(TextEditor::textColourId) == HostDesign::text,
+                "Existing library controls retained the previous palette");
+        require(search->getText() == "Preserve my search", "Appearance change reset the search");
+        require(contrast(HostDesign::text, HostDesign::canvas) >= 7.0f
+                && contrast(HostDesign::secondary, HostDesign::surface) >= 4.5f,
+                "Appearance text has insufficient contrast");
+        if (dark) darkCanvas = HostDesign::canvas;
+        else require(HostDesign::canvas != darkCanvas, "Palette references did not update");
+    }
+    library.removeFromDesktop();
+    library.setLookAndFeel(nullptr);
+    theme.applyDarkMode(previous);
+}
+
 void checkPopupTransparency()
 {
     LightHostLookAndFeel theme;
@@ -773,7 +948,7 @@ void checkPopupTransparency()
     }
     const int leftGutterAlpha = menuImage.getPixelAt(4, 22).getAlpha();
     const int rightGutterAlpha = menuImage.getPixelAt(275, 22).getAlpha();
-    theme.drawPopupMenuItem(menuGraphics, Rectangle<int>(0, 12, 280, HostDesign::menuRowHeight),
+    theme.drawPopupMenuItem(menuGraphics, juce::Rectangle<int>(0, 12, 280, HostDesign::menuRowHeight),
                            false, true, true, false, true, "Sort by", String(), nullptr, nullptr);
     require(menuImage.getPixelAt(4, 22).getAlpha() == leftGutterAlpha
             && menuImage.getPixelAt(275, 22).getAlpha() == rightGutterAlpha,
@@ -788,7 +963,10 @@ void checkPopupTransparency()
         menu.setLookAndFeel(&theme);
         menu.addItem(1, "Rename");
         menu.addColouredItem(2, "Remove", HostDesign::danger);
-        menu.showMenuAsync(PopupMenu::Options().withTargetScreenArea(Rectangle<int>(200, 200, 1, 1)),
+        menu.addItem(3, "Unavailable", false);
+        menu.addSeparator();
+        menu.addItem(4, "Close");
+        menu.showMenuAsync(PopupMenu::Options().withTargetScreenArea(juce::Rectangle<int>(200, 200, 1, 1)),
                           ModalCallbackFunction::create([] (int) {}));
         require(desktop.getNumComponents() == initialWindows + 1,
                 "Popup menu created additional backing or shadow windows");
@@ -801,6 +979,10 @@ void checkPopupTransparency()
         require(popup->getNumChildComponents() > 0
                 && popup->getChildComponent(0)->getY() >= HostDesign::popupShadowMargin + 2,
                 "Menu items overlap the rounded panel's shadow margin");
+        require(theme.getMouseCursorFor(*popup->getChildComponent(0)) == MouseCursor::PointingHandCursor
+                && theme.getMouseCursorFor(*popup->getChildComponent(2)) == MouseCursor::NormalCursor
+                && theme.getMouseCursorFor(*popup->getChildComponent(3)) == MouseCursor::NormalCursor,
+                "Popup cursor does not distinguish actions from disabled rows and separators");
         PopupMenu::dismissAllActiveMenus();
         MessageManager::getInstance()->runDispatchLoopUntil(20);
         require(desktop.getNumComponents() == initialWindows,
@@ -817,7 +999,7 @@ void checkPopupTransparency()
             auto* toggle = dynamic_cast<HostDesign::Switch*>(item->getChildComponent(0));
             require(toggle != nullptr && toggle->getToggleState() == enabled,
                     "Tray startup item did not use the Settings switch with the current state");
-            startupMenu.showMenuAsync(PopupMenu::Options().withTargetScreenArea(Rectangle<int>(200, 200, 1, 1)),
+            startupMenu.showMenuAsync(PopupMenu::Options().withTargetScreenArea(juce::Rectangle<int>(200, 200, 1, 1)),
                 ModalCallbackFunction::create([&](int id) { result = id; if (id == 3) enabled = !enabled; }));
             popup = nullptr;
             for (int i = 0; i < desktop.getNumComponents(); ++i)
@@ -1027,15 +1209,28 @@ private:
 
 void checkDuplicateInstanceAudioAndBackup()
 {
+    const File parent = File::getSpecialLocation(File::tempDirectory);
+    const File root = parent.getNonexistentChildFile("LightHost-current-backup", "", false);
+    const File source = root.getChildFile("Downloaded plugins/Gain.vst3");
+    require(root.isAChildOf(parent) && source.getParentDirectory().createDirectory().wasOk()
+            && source.replaceWithText("plugin binary fixture"), "Could not create current backup fixture");
     PluginDescription plugin;
     plugin.name = "Gain";
     plugin.pluginFormatName = "VST3";
-    plugin.fileOrIdentifier = "/plugins/Gain.vst3";
+    plugin.fileOrIdentifier = source.getFullPathName();
     plugin.uid = 92;
     PropertySet settings;
     PluginInstances instances;
     const auto first = instances.addInstance(plugin, settings);
     const auto second = instances.addInstance(plugin, settings);
+    settings.setValue(first.settingsKey("display-name"), "Quiet gain");
+    settings.setValue("mainWindowState", "fs -1600 80 1250 820");
+    settings.setValue("lastPluginImportPath", source.getParentDirectory().getFullPathName());
+    settings.setValue("darkMode", false);
+    XmlElement audioSetup("DEVICESETUP");
+    audioSetup.setAttribute("audioDeviceRate", 48000);
+    audioSetup.setAttribute("audioDeviceBufferSize", 256);
+    settings.setValue("audioDeviceState", &audioSetup);
     AudioProcessorGraph graph;
     graph.setPlayConfigDetails(2, 2, 48000, 64);
     graph.addNode(new AudioProcessorGraph::AudioGraphIOProcessor(AudioProcessorGraph::AudioGraphIOProcessor::audioInputNode), PluginChain::inputNodeId);
@@ -1071,6 +1266,7 @@ void checkDuplicateInstanceAudioAndBackup()
     }
     require(settings.getValue(first.settingsKey("state")) != settings.getValue(second.settingsKey("state")),
             "Duplicate processors did not retain different parameter states");
+    settings.setValue(second.settingsKey("bypass"), true);
     ScopedPointer<XmlElement> active(instances.createXml());
     settings.setValue("pluginListActive", active);
     KnownPluginList known;
@@ -1081,55 +1277,112 @@ void checkDuplicateInstanceAudioAndBackup()
             "Backup included the same plugin binary more than once");
     require(PluginBackup::hasValidPluginLists(settings, true), "Valid multi-instance backup rejected");
 
-    // Exercise the same XML/ZIP payload used by an exported version 3 backup.
-    ScopedPointer<XmlElement> xml(settings.createXml("PROPERTIES"));
-    const String payload = xml->createDocument(String(), true);
-    ZipFile::Builder builder;
-    builder.addEntry(new MemoryInputStream(payload.toRawUTF8(), payload.getNumBytesAsUTF8(), true), 6, "settings.xml", Time::getCurrentTime());
-    MemoryOutputStream bytes;
-    require(builder.writeToStream(bytes, nullptr), "Could not archive multi-instance settings");
-    MemoryInputStream input(bytes.getData(), bytes.getDataSize(), false);
-    ZipFile archive(input);
-    ScopedPointer<InputStream> restoredStream(archive.createStreamForEntry(archive.getIndexOfFileName("settings.xml")));
-    ScopedPointer<XmlElement> restoredXml(XmlDocument::parse(restoredStream->readEntireStreamAsString()));
-    PropertySet imported;
-    imported.restoreFromXml(*restoredXml);
-    StringArray oldPaths, newPaths;
-    oldPaths.add(plugin.fileOrIdentifier); newPaths.add("/restored/Gain.vst3");
-    const File destination = File::getSpecialLocation(File::tempDirectory).getChildFile("instance-import");
-    PluginBackup::prepareImportedSettings(imported, oldPaths, newPaths, destination);
-    PluginState::relocatePortableSettings(imported, destination);
-    ScopedPointer<XmlElement> importedList(XmlDocument::parse(imported.getValue("pluginListActive")));
-    PluginInstances restored;
-    restored.recreateFromXml(*importedList);
-    restored.migrateLegacySettings(imported);
-    require(restored.getNumTypes() == 2 && restored.ordered(imported)[0].instanceId == second.instanceId,
-            "Backup restore collapsed instances or lost their order");
-    for (const auto& entry : restored.ordered(imported))
     {
-        require(entry.fileOrIdentifier == "/restored/Gain.vst3", "Restored instance did not follow its binary");
-        MemoryBlock state;
-        state.fromBase64Encoding(imported.getValue(entry.settingsKey("state")));
-        SnapshotGain processor(1.0f);
-        processor.setStateInformation(state.getData(), (int) state.getSize());
-        AudioBuffer<float> audio(2, 1);
-        audio.setSample(0, 0, 1); audio.setSample(1, 0, 1);
-        MidiBuffer midi;
-        processor.processBlock(audio, midi);
-        require(audio.getSample(0, 0) == (entry.instanceId == first.instanceId ? 0.5f : 0.25f),
-                "Restored copies shared or lost their parameter configurations");
+        // Exercise the production exporter, extraction, settings save, and startup migration.
+        ScopedPointer<XmlElement> xml(settings.createXml("PROPERTIES"));
+        XmlElement manifest("LIGHTHOST_BACKUP");
+        manifest.setAttribute("version", 3);
+        auto* binary = manifest.createNewChildElement("PLUGIN");
+        binary->setAttribute("id", 0);
+        binary->setAttribute("format", plugin.pluginFormatName);
+        binary->setAttribute("source", plugin.fileOrIdentifier);
+        binary->setAttribute("archiveRoot", "plugins/0");
+        binary->setAttribute("isDirectory", false);
+        const File backup = root.getChildFile("current.lightbak");
+        PluginBackup::ExportTask worker(backup);
+        worker.plugins.add(source);
+        worker.settingsText = xml->createDocument(String(), true);
+        worker.manifestText = manifest.createDocument(String(), true);
+        worker.startThread(3);
+        require(worker.waitForThreadToExit(10000) && worker.succeeded,
+                "Production exporter failed to write the current backup");
+        require(source.deleteFile(), "Could not remove original binary before restore");
+        ZipFile archive(backup);
+        require(archive.getNumEntries() == 3, "Backup did not contain one binary, settings, and manifest");
+        ScopedPointer<InputStream> manifestStream(archive.createStreamForEntry(archive.getIndexOfFileName("manifest.xml")));
+        require(manifestStream != nullptr, "Backup omitted its manifest");
+        ScopedPointer<XmlElement> importedManifest(XmlDocument::parse(manifestStream->readEntireStreamAsString()));
+        require(importedManifest != nullptr && importedManifest->hasTagName("LIGHTHOST_BACKUP")
+                && PluginBackup::supportsVersion(importedManifest->getIntAttribute("version")),
+                "Current backup manifest was not compatible with import");
+        ScopedPointer<InputStream> restoredStream(archive.createStreamForEntry(archive.getIndexOfFileName("settings.xml")));
+        require(restoredStream != nullptr, "Backup omitted its settings");
+        ScopedPointer<XmlElement> restoredXml(XmlDocument::parse(restoredStream->readEntireStreamAsString()));
+        require(restoredXml != nullptr, "Backup settings could not be read");
+        PropertySet imported;
+        imported.restoreFromXml(*restoredXml);
+        require(PluginBackup::hasValidPluginLists(imported, true), "Exported instance lists were invalid");
+        const File destination = root.getChildFile("restored-app");
+        const File restoredBinary = PluginBackup::restoreDestination(source, FileSearchPath(), destination.getChildFile("VST Plugins"));
+        const int binaryIndex = archive.getIndexOfFileName("plugins/0/Gain.vst3");
+        require(binaryIndex >= 0 && restoredBinary.getParentDirectory().createDirectory().wasOk(),
+                "Backup omitted the downloaded plugin binary or its restore folder");
+        {
+            ScopedPointer<InputStream> stream(archive.createStreamForEntry(binaryIndex));
+            FileOutputStream output(restoredBinary);
+            require(stream != nullptr && !output.failedToOpen()
+                    && output.writeFromInputStream(*stream, -1) == archive.getEntry(binaryIndex)->uncompressedSize,
+                    "Could not restore the downloaded plugin binary");
+            output.flush();
+            require(output.getStatus().wasOk(), "Restored binary could not be saved");
+        }
+        require(restoredBinary.loadFileAsString() == "plugin binary fixture", "Backup changed the plugin binary");
+        StringArray oldPaths, newPaths;
+        oldPaths.add(plugin.fileOrIdentifier); newPaths.add(restoredBinary.getFullPathName());
+        PluginBackup::prepareImportedSettings(imported, oldPaths, newPaths, destination);
+        PropertiesFile::Options options;
+        options.millisecondsBeforeSaving = -1;
+        const File settingsFile = destination.getChildFile("Data/Light Host.settings");
+        {
+            PropertiesFile saved(settingsFile, options);
+            saved.addAllPropertiesFrom(imported);
+            require(saved.saveIfNeeded(), "Imported settings could not be saved");
+        }
+        PropertiesFile restarted(settingsFile, options);
+        require(restarted.isValidFile(), "Imported settings could not be loaded after restart");
+        PluginState::relocatePortableSettings(restarted, destination);
+        require(restarted.getValue("mainWindowState") == settings.getValue("mainWindowState")
+                && restarted.getValue("lastPluginImportPath") == settings.getValue("lastPluginImportPath")
+                && !restarted.getBoolValue("darkMode", true)
+                && restarted.getValue("audioDeviceState") == settings.getValue("audioDeviceState"),
+                "Backup restart lost window placement, picker folder, appearance, or audio settings");
+        ScopedPointer<XmlElement> importedList(XmlDocument::parse(restarted.getValue("pluginListActive")));
+        PluginInstances restored;
+        restored.recreateFromXml(*importedList);
+        restored.migrateLegacySettings(restarted);
+        require(restored.getNumTypes() == 2 && restored.ordered(restarted)[0].instanceId == second.instanceId,
+                "Backup restore collapsed instances or lost their order");
+        for (const auto& entry : restored.ordered(restarted))
+        {
+            require(entry.fileOrIdentifier == restoredBinary.getFullPathName(), "Restored instance did not follow its binary");
+            require(entry.displayName(restarted) == (entry.instanceId == first.instanceId ? "Quiet gain" : "Gain 2")
+                    && restarted.getBoolValue(entry.settingsKey("bypass")) == settings.getBoolValue(entry.settingsKey("bypass")),
+                    "Backup restart lost an independent instance name or bypass state");
+            MemoryBlock state;
+            state.fromBase64Encoding(restarted.getValue(entry.settingsKey("state")));
+            SnapshotGain processor(1.0f);
+            processor.setStateInformation(state.getData(), (int) state.getSize());
+            AudioBuffer<float> audio(2, 1);
+            audio.setSample(0, 0, 1); audio.setSample(1, 0, 1);
+            MidiBuffer midi;
+            processor.processBlock(audio, midi);
+            require(audio.getSample(0, 0) == (entry.instanceId == first.instanceId ? 0.5f : 0.25f),
+                    "Restored copies shared or lost their parameter configurations");
+        }
+        importedList->getChildElement(1)->setAttribute("instanceId", importedList->getChildElement(0)->getStringAttribute("instanceId"));
+        imported.setValue("pluginListActive", importedList);
+        require(!PluginBackup::hasValidPluginLists(imported, true), "Backup accepted shared instance identities");
+        importedList->getChildElement(1)->removeAttribute("instanceId");
+        imported.setValue("pluginListActive", importedList);
+        require(!PluginBackup::hasValidPluginLists(imported, true), "Version 3 backup accepted a missing identity");
     }
-    importedList->getChildElement(1)->setAttribute("instanceId", importedList->getChildElement(0)->getStringAttribute("instanceId"));
-    imported.setValue("pluginListActive", importedList);
-    require(!PluginBackup::hasValidPluginLists(imported, true), "Backup accepted shared instance identities");
-    importedList->getChildElement(1)->removeAttribute("instanceId");
-    imported.setValue("pluginListActive", importedList);
-    require(!PluginBackup::hasValidPluginLists(imported, true), "Version 3 backup accepted a missing identity");
+    settings.setValue(second.settingsKey("bypass"), false);
     require(instances.removeInstance(first.instanceId, settings), "Could not remove the first processor instance");
     graph.removeNode(41);
     reconnect(); checkAudio(graph, 0.0625f);
     require(graph.getNodeForId(42)->getProcessor() == secondDsp,
             "Removing one copy replaced the surviving copy's processor");
+    require(root.isAChildOf(parent) && root.deleteRecursively(), "Could not remove current backup fixture");
 }
 }
 
@@ -1141,6 +1394,7 @@ int main()
         checkChain();
         checkStableNodeRouting();
         checkChannelSetup();
+        checkMinimizedAudioTiming();
         checkAudioDenormals();
         checkPlayerDiagnostics();
         checkIdentityAndMigration();
@@ -1149,6 +1403,8 @@ int main()
         checkSynchronizedStateCapture();
         checkPluginLibraryActions();
         checkBypassPresentation();
+        checkHostCursors();
+        checkAppearanceChanges();
         checkPopupTransparency();
         checkImportedBackupRestart();
         checkInstanceOrdering();
@@ -1161,8 +1417,11 @@ int main()
         std::cout << "PASS: plugin identity migration, backup round trips, active-only backups, editor reuse, unsupported layouts, state synchronization\n";
         std::cout << "PASS: inline library metadata and search, filtered removal preserving active copies, independent adds, stale results, selection clearing\n";
         std::cout << "PASS: tooltip-free library, shared startup switches with keyboard activation, transparent menus and dismissal cleanup\n";
+        std::cout << "PASS: live dark/light switching, existing library colors, preserved search, and text contrast\n";
+        std::cout << "PASS: clickable button, switch, selector, and menu cursors; disabled, text, and resize cursors preserved\n";
         std::cout << "PASS: bypass indication for loaded and missing effects; legacy and current backup imports survive restart and later moves\n";
         std::cout << "PASS: independent instance migration, fresh defaults, rename/order/removal isolation, duplicate DSP bypass, version 3 backup configurations\n";
+        std::cout << "PASS: production backup export, downloaded binary restore, and disk restart preserve window placement, picker folder, appearance, audio, and independent instance settings\n";
         return 0;
     }
     catch (const std::exception& error)

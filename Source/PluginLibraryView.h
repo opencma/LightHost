@@ -55,6 +55,63 @@ public:
 
     void focusSearch() { searchBox.grabKeyboardFocus(); searchBox.selectAll(); }
 
+    void importPlugins()
+    {
+        if (formats == nullptr || settings == nullptr) return;
+
+        const File downloads = File::getSpecialLocation(File::userHomeDirectory).getChildFile("Downloads");
+        const File defaultDirectory = downloads.isDirectory()
+            ? downloads : File::getSpecialLocation(File::userDocumentsDirectory);
+        const File rememberedDirectory(settings->getValue("lastPluginImportPath", defaultDirectory.getFullPathName()));
+        const File initialDirectory = rememberedDirectory.isDirectory() ? rememberedDirectory : defaultDirectory;
+       #if JUCE_WINDOWS
+        const String filter = "*.dll;*.vst3";
+       #elif JUCE_MAC
+        const String filter = "*.vst;*.vst3;*.component";
+       #else
+        const String filter = "*.so;*.vst3";
+       #endif
+        FileChooser chooser("Import plugins", initialDirectory, filter, true);
+        Component::SafePointer<PluginLibraryView> safe(this);
+        const bool selected = chooser.browseForMultipleFilesToOpen();
+        if (safe == nullptr || !selected) return;
+
+        const auto& files = chooser.getResults();
+        if (files.isEmpty()) return;
+        settings->setValue("lastPluginImportPath", files.getReference(0).getParentDirectory().getFullPathName());
+
+        StringArray failed;
+        String firstImported;
+        for (const auto& file : files)
+        {
+            OwnedArray<PluginDescription> found;
+            StringArray paths;
+            paths.add(file.getFullPathName());
+            known.scanAndAddDragAndDroppedFiles(*formats, paths, found);
+            if (found.isEmpty()) failed.add(file.getFullPathName());
+            else if (firstImported.isEmpty()) firstImported = PluginState::key("library", *found[0]);
+        }
+        if (firstImported.isNotEmpty()) searchBox.clear();
+        refresh();
+        for (int i = 0; i < (int) rows.size(); ++i)
+            if (rows[i].identity == firstImported)
+            {
+                list.selectRow(i);
+                list.scrollToEnsureRowIsOnscreen(i);
+                break;
+            }
+        if (!failed.isEmpty())
+            AlertWindow::showMessageBoxAsync(AlertWindow::WarningIcon, "Plugin import",
+                "These files could not be loaded as compatible plugins:\n\n" + failed.joinIntoString("\n"));
+    }
+
+    void lookAndFeelChanged() override
+    {
+        list.setColour(ListBox::backgroundColourId, HostDesign::canvas);
+        empty.setColour(Label::textColourId, HostDesign::secondary);
+        searchBox.setTextToShowWhenEmpty("Search plugins", HostDesign::secondary);
+    }
+
     bool isInterestedInFileDrag (const StringArray&) override { return formats != nullptr; }
     void filesDropped (const StringArray& files, int, int) override
     {

@@ -22,6 +22,7 @@ public:
 
     void moved() override;
     void closeButtonPressed() override;
+    void lookAndFeelChanged() override;
 
 private:
     AudioProcessorGraph::Node* owner;

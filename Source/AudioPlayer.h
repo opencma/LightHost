@@ -3,6 +3,7 @@
 
 #include <atomic>
 #include <cmath>
+#include "WindowsAudioTiming.h"
 #if JUCE_INTEL
  #include <xmmintrin.h>
 #endif
@@ -14,6 +15,10 @@ public:
     explicit AudioPlayer(const File& logFile)
         : logger(logFile, "Light Host audio diagnostics", maxLogBytes)
     {
+#if JUCE_WINDOWS
+        logger.logMessage(String("Windows background timer protection: ")
+            + (windowsAudioTiming.isEnabled() ? "enabled" : "unavailable on this system"));
+#endif
         startTimer(5000);
     }
 
@@ -133,6 +138,9 @@ private:
     }
 
     static const int maxLogBytes = 128 * 1024;
+#if JUCE_WINDOWS
+    WindowsAudioTiming windowsAudioTiming;
+#endif
     FileLogger logger;
     std::atomic<double> sampleRate { 0.0 };
     std::atomic<int> missedDeadlines { 0 }, invalidBuffers { 0 };

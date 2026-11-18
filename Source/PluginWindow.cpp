@@ -1,12 +1,13 @@
 #include "../JuceLibraryCode/JuceHeader.h"
 #include "PluginWindow.h"
+#include "HostDesign.h"
 
 static Array <PluginWindow*> activePluginWindows;
 
 PluginWindow::PluginWindow (Component* const pluginEditor,
                             AudioProcessorGraph::Node* const o,
                             WindowFormatType t)
-    : DocumentWindow (pluginEditor->getName(), Colours::lightgrey,
+    : DocumentWindow (pluginEditor->getName(), HostDesign::canvas,
                       DocumentWindow::minimiseButton | DocumentWindow::closeButton),
       owner (o),
       type (t),
@@ -14,6 +15,7 @@ PluginWindow::PluginWindow (Component* const pluginEditor,
 {
     setSize (400, 300);
     setUsingNativeTitleBar(true);
+    HostDesign::updateNativeTitleBar(*this);
     setContentOwned (pluginEditor, true);
 
     setTopLeftPosition (owner->properties.getWithDefault (getLastXProp (type), Random::getSystemRandom().nextInt (500)),
@@ -101,4 +103,11 @@ void PluginWindow::moved()
 void PluginWindow::closeButtonPressed()
 {
     delete this;
+}
+
+void PluginWindow::lookAndFeelChanged()
+{
+    DocumentWindow::lookAndFeelChanged();
+    setBackgroundColour(HostDesign::canvas);
+    HostDesign::updateNativeTitleBar(*this);
 }
